@@ -1,0 +1,32 @@
+{
+  "name": "protocol-performance-analysis",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+	"dev": "ts-node index.ts",
+	"build": "tsc",
+	"start": "node dist/index.js",
+	"test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/alef-sena/protocol-performance-analysis.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/alef-sena/protocol-performance-analysis/issues"
+  },
+  "homepage": "https://github.com/alef-sena/protocol-performance-analysis#readme",
+  "devDependencies": {
+    "@types/node": "^24.0.8",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.8.3"
+  }
+}
