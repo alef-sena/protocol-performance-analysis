@@ -1,0 +1,29 @@
+services:
+  http-server:
+    container_name: http-server
+    build:
+      context: .
+      dockerfile: docker/http/Dockerfile.server
+    networks:
+      - testnet
+    ports:
+      - "3000:3000"
+
+  http-client:
+    container_name: http-client
+    build:
+      context: .
+      dockerfile: docker/http/Dockerfile.client
+    depends_on:
+      - http-server
+    environment:
+      - TARGET=http-server:3000
+    networks:
+      - testnet
+    volumes:
+      - ./data:/app/data
+      - ./scripts:/app/scripts
+      - ./protocols:/app/protocols
+
+networks:
+  testnet:

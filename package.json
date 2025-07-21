@@ -1,32 +1,39 @@
 {
-  "name": "protocol-performance-analysis",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "directories": {
-    "doc": "docs"
-  },
-  "scripts": {
-	"dev": "ts-node index.ts",
-	"build": "tsc",
-	"start": "node dist/index.js",
-	"test": "echo \"Error: no test specified\" && exit 1"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/alef-sena/protocol-performance-analysis.git"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs",
-  "bugs": {
-    "url": "https://github.com/alef-sena/protocol-performance-analysis/issues"
-  },
-  "homepage": "https://github.com/alef-sena/protocol-performance-analysis#readme",
-  "devDependencies": {
-    "@types/node": "^24.0.8",
-    "ts-node": "^10.9.2",
-    "typescript": "^5.8.3"
-  }
+    "name": "protocol-performance-analysis",
+    "version": "1.0.0",
+    "description": "",
+    "main": "index.js",
+    "directories": {
+        "doc": "docs"
+    },
+    "scripts": {
+        "build": "tsc",
+		"analyze:http": "npx ts-node scripts/orchestrator.ts",
+        "lint": "eslint . --ext .ts",
+        "lint:fix": "eslint . --ext .ts --fix"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/alef-sena/protocol-performance-analysis.git"
+    },
+    "keywords": [],
+    "author": "",
+    "license": "ISC",
+    "type": "commonjs",
+    "bugs": {
+        "url": "https://github.com/alef-sena/protocol-performance-analysis/issues"
+    },
+    "homepage": "https://github.com/alef-sena/protocol-performance-analysis#readme",
+    "devDependencies": {
+        "@types/cross-spawn": "^6.0.6",
+        "@types/node": "^24.0.8",
+        "@types/pidusage": "^2.0.5",
+        "ts-node": "^10.9.2",
+        "typescript": "^5.8.3"
+    },
+    "dependencies": {
+        "cross-spawn": "^7.0.6",
+        "pidusage": "^4.0.1",
+        "pidusage-tree": "^2.0.5"
+    }
 }
