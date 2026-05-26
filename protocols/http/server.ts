@@ -26,7 +26,6 @@ const server = http.createServer((req, res) => {
 			res.end(JSON.stringify(result));
 		});
 	} else if (req.method === 'GET' && req.url === '/health') {
-		// ✅ Endpoint usado por orchestrator.ts para verificar se o servidor está pronto
 		res.writeHead(200, { 'Content-Type': 'application/json' });
 		res.end(JSON.stringify({ status: 'ok' }));
 	} else {
@@ -40,7 +39,7 @@ server.listen(PORT, () => {
 	startMonitoring();
 });
 
-const usageOutPath = path.resolve('data/raw/http-resource-usage.json');
+const usageOutPath = path.resolve('data/raw/http/resource-usage.json');
 let cpuStart = process.cpuUsage();
 let timeStart = Date.now();
 let monitorInterval: NodeJS.Timeout;

@@ -8,7 +8,8 @@
     },
     "scripts": {
         "build": "tsc",
-		"analyze:http": "npx ts-node scripts/orchestrator.ts",
+		"execute:all": "npx ts-node scripts/orchestrator.ts",
+        "analyze:http": "python3 analysis/analyze_http_metrics.py",
         "lint": "eslint . --ext .ts",
         "lint:fix": "eslint . --ext .ts --fix"
     },
@@ -25,15 +26,20 @@
     },
     "homepage": "https://github.com/alef-sena/protocol-performance-analysis#readme",
     "devDependencies": {
+        "@types/autocannon": "^7.12.7",
         "@types/cross-spawn": "^6.0.6",
+        "@types/dockerode": "^3.3.42",
         "@types/node": "^24.0.8",
         "@types/pidusage": "^2.0.5",
         "ts-node": "^10.9.2",
         "typescript": "^5.8.3"
     },
     "dependencies": {
+        "autocannon": "^8.0.0",
         "cross-spawn": "^7.0.6",
+        "dockerode": "^4.0.7",
         "pidusage": "^4.0.1",
-        "pidusage-tree": "^2.0.5"
+        "pidusage-tree": "^2.0.5",
+        "undici": "^7.12.0"
     }
 }

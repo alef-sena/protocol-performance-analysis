@@ -1,66 +1,33 @@
-import { spawn, execSync } from 'child_process';
+import { spawn, spawnSync, execSync } from 'child_process';
 import http from 'http';
 import path from 'path';
 import fs from 'fs';
+import Docker from 'dockerode';
 
-const RAW_DATA_DIR = path.resolve('data/raw');
-const OUTPUT_STATS_FILE = path.join(RAW_DATA_DIR, 'http-resource-usage.json');
+const RAW_DATA_DIR = path.resolve('data/raw/http');
+const docker = new Docker();
 
-const containerNames = [
-  'http-server',
-  'http-client',
-];
-
-const stats: any[] = [];
-let statsInterval: NodeJS.Timeout;
-
-function parseDockerStats(output: string) {
-  const lines = output.trim().split('\n');
-  const found = [];
-
-  lines.forEach((line) => {
-    const [name, cpu, memUsage] = line.split(/\s{2,}/);
-    if (containerNames.includes(name)) {
-      stats.push({
-        timestamp: Date.now(),
-        container: name,
-        cpu: parseFloat(cpu.replace('%', '')),
-        memoryMB: parseFloat(memUsage.split('/')[0].replace(/[^0-9.]/g, '')),
-      });
-      found.push(name);
-    }
-  });
-
-  if (found.length === 0) {
-    console.warn('Nenhum container relevante encontrado pelo docker stats.');
-  }
+function sleep(ms: number) {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-function startStatsCollection() {
-  console.log('Iniciando coleta de métricas...');
-  statsInterval = setInterval(() => {
-    try {
-      const output = execSync(
-        'docker stats --no-stream --format "{{.Name}}  {{.CPUPerc}}  {{.MemUsage}}"',
-      ).toString();
-      parseDockerStats(output);
-    } catch (err) {
-      console.error('Erro ao coletar docker stats:', err);
-    }
-  }, 500);
-}
+async function collectContainerStats(containerName: string, intervalMs: number, collectingFlag: () => boolean): Promise<any[]> {
+  const stats = [];
+  const container = docker.getContainer(containerName);
 
-function stopStatsCollection() {
-  clearInterval(statsInterval);
+  while (collectingFlag()) {
+    const stat = await container.stats({ stream: false });
+    const cpuDelta = stat.cpu_stats.cpu_usage.total_usage - stat.precpu_stats.cpu_usage.total_usage;
+    const systemDelta = stat.cpu_stats.system_cpu_usage - stat.precpu_stats.system_cpu_usage;
+    const cpu = (systemDelta > 0 && cpuDelta > 0) ? (cpuDelta / systemDelta) * stat.cpu_stats.online_cpus : 0;
 
-  if (!fs.existsSync(RAW_DATA_DIR)) fs.mkdirSync(RAW_DATA_DIR, { recursive: true });
+    const memoryMB = stat.memory_stats.usage / 1024 / 1024;
+    stats.push({ timestamp: Date.now(), cpu, memoryMB });
 
-  if (stats.length === 0) {
-    console.error('Nenhuma métrica foi coletada. Verifique se os containers estão corretos.');
+    await sleep(intervalMs);
   }
 
-  fs.writeFileSync(OUTPUT_STATS_FILE, JSON.stringify(stats, null, 2));
-  console.log(`Métricas salvas em ${OUTPUT_STATS_FILE}`);
+  return stats;
 }
 
 function runDockerComposeUp(): Promise<void> {
@@ -75,47 +42,64 @@ function runDockerComposeUp(): Promise<void> {
   });
 }
 
-function waitForServerReady(url: string, timeoutMs = 10000): Promise<void> {
-  console.log('Aguardando servidor responder...');
+function waitForContainerRunning(containerName: string, timeoutMs = 10000): Promise<void> {
   return new Promise((resolve, reject) => {
-		const start = Date.now();
+    const start = Date.now();
+    const interval = setInterval(() => {
+      const status = spawnSync('docker', ['inspect', '-f', '{{.State.Running}}', containerName]);
+      const isRunning = status.stdout.toString().trim() === 'true';
 
-		const check = () => {
-			http.get(url, (res) => {
-				if (res.statusCode === 200) {
-					resolve();
-				} else {
-					retry();
-				}
-			}).on('error', retry);
-		};
-
-		const retry = () => {
-			if (Date.now() - start > timeoutMs) {
-				reject(new Error('⛔ Tempo limite ao aguardar o servidor.'));
-			} else {
-				setTimeout(check, 500);
-			}
-		};
-
-		check();
-	});
-}
-
-function runClient(): Promise<void> {
-  return new Promise((resolve, reject) => {
-    console.log('Executando client...');
-    const client = spawn('docker', ['compose', 'run', '--rm', 'http-client'], { stdio: 'inherit' });
-
-    client.on('close', (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`http-client terminou com código ${code}`));
-    });
+      if (isRunning) {
+        clearInterval(interval);
+        resolve();
+      } else if (Date.now() - start > timeoutMs) {
+        clearInterval(interval);
+        reject(new Error(`Timeout: ${containerName} não ficou pronto`));
+      }
+    }, 500);
   });
 }
 
+function waitForServerHealth(url: string, timeoutMs = 10000): Promise<void> {
+  console.log('Aguardando servidor responder...');
+  return new Promise((resolve, reject) => {
+    const start = Date.now();
+
+    const check = () => {
+      http.get(url, (res) => {
+        if (res.statusCode === 200) {
+          console.log('Servidor OK');
+          resolve();
+        } else {
+          retry();
+        }
+      }).on('error', retry);
+    };
+
+    const retry = () => {
+      if (Date.now() - start > timeoutMs) {
+        reject(new Error('Tempo limite ao aguardar o servidor.'));
+      } else {
+        setTimeout(check, 500);
+      }
+    };
+
+    check();
+  });
+}
+
+function cleanupDocker() {
+  console.log('Limpando containers...\n');
+  try {
+    execSync('docker compose down --remove-orphans', { stdio: 'inherit' });
+    console.log('Containers removidos\n');
+  } catch (err) {
+    console.error('Erro ao remover containers:', err);
+  }
+}
+
 function runPythonAnalysis(): void {
-  console.log('Executando análise de métricas...');
+  console.log('Todos os testes concluídos. Executando análise de métricas...');
   try {
     execSync('python3 analysis/analyze_http_metrics.py', { stdio: 'inherit' });
   } catch (err) {
@@ -123,36 +107,67 @@ function runPythonAnalysis(): void {
   }
 }
 
-function cleanupDocker() {
-  console.log('Limpando containers...');
-  try {
-    execSync('docker compose down --remove-orphans', { stdio: 'inherit' });
-    console.log('Containers removidos.');
-  } catch (err) {
-    console.error('Erro ao remover containers:', err);
-  }
+function runClientScript(requests: number, payloadKB: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const env = {
+      ...process.env,
+      TOTAL_REQUESTS: String(requests),
+      PAYLOAD_KB: String(payloadKB),
+      TARGET: 'localhost:3000',
+    };
+
+    const child = spawn('npx', ['ts-node', 'protocols/http/client.ts'], {
+      env,
+      stdio: 'inherit',
+    });
+
+    child.on('close', (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`Client saiu com código ${code}`));
+    });
+  });
 }
 
 async function orchestrate() {
-  try {
-    await runDockerComposeUp();
+  const workloadPath = path.resolve(__dirname, '../config/http-workload.json');
+  const workloadConfig = JSON.parse(fs.readFileSync(workloadPath, 'utf-8'));
 
-    await waitForServerReady('http://localhost:3000/health', 120000);
+  for (const config of workloadConfig) {
+    const { requests, payloadKB } = config;
 
-    startStatsCollection();
+    try {
+      await runDockerComposeUp();
+      await waitForContainerRunning('http-server', 10000);
+      await waitForServerHealth('http://localhost:3000/health', 20000);
 
-    await runClient();
+      console.log(`Executando teste: [${requests} requisições, ${payloadKB} KB]. Aguarde...`);
 
-    stopStatsCollection();
+      let collecting = true;
+      const collectingFlag = () => collecting;
 
-    runPythonAnalysis();
+      const statsPromise = collectContainerStats('http-server', 1000, collectingFlag);
 
-    console.log('Análise concluída com sucesso.');
-  } catch (err) {
-    console.error('Erro durante a orquestração:', err);
-  } finally {
-    cleanupDocker();
+      await runClientScript(requests, payloadKB);
+      collecting = false;
+
+      const metrics = await statsPromise;
+
+      const resourcesFilename = `resource-usage/${requests}req-${payloadKB}kb.json`;
+      const resourcePath = path.join(RAW_DATA_DIR, resourcesFilename);
+
+      if (!fs.existsSync(path.dirname(resourcePath))) fs.mkdirSync(path.dirname(resourcePath), { recursive: true });
+
+      fs.writeFileSync(resourcePath, JSON.stringify(metrics, null, 2));
+      console.log(`Métricas de uso de recursos salvas em ${resourcePath}`);
+    } catch (err) {
+      console.error('Erro durante o teste:', err);
+    } finally {
+      cleanupDocker();
+    }
   }
+
+  runPythonAnalysis();
+  console.log('\nTodas as análises foram concluídas.');
 }
 
 orchestrate();

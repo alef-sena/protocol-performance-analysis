@@ -1,13 +1,12 @@
-import http from 'http';
 import fs from 'fs';
 import path from 'path';
+import { fetch } from 'undici';
 
 const HOST = process.env.TARGET?.split(':')[0] || 'localhost';
 const PORT = Number(process.env.TARGET?.split(':')[1]) || 3000;
-const TOTAL_REQUESTS = 100000;
+const TOTAL_REQUESTS = parseInt(process.env.TOTAL_REQUESTS || '10000');
+const PAYLOAD_SIZE = parseInt(process.env.PAYLOAD_KB || '1') * 1024;
 const CONCURRENCY = 1;
-// 1024 // 1 KB
-const PAYLOAD_SIZE = 1024 * 100;
 const PAYLOAD = 'x'.repeat(PAYLOAD_SIZE);
 
 const results: {
@@ -20,54 +19,43 @@ const results: {
 let completedRequests = 0;
 
 async function sendRequest(i: number): Promise<void> {
-	return new Promise((resolve) => {
-		const payload = JSON.stringify({ message: PAYLOAD });
+	const payload = JSON.stringify({ message: PAYLOAD });
+	const url = `http://${HOST}:${PORT}/process`;
 
-		const options = {
-			hostname: HOST,
-			port: PORT,
-			path: '/process',
+	const start = Date.now();
+
+	try {
+		const res = await fetch(url, {
 			method: 'POST',
 			headers: {
 				'Content-Type': 'application/json',
-				'Content-Length': Buffer.byteLength(payload),
+				'Content-Length': Buffer.byteLength(payload).toString(),
 			},
-		};
-
-		const start = Date.now();
-
-		const req = http.request(options, (res) => {
-			res.on('data', () => {});
-
-			res.on('end', () => {
-				const end = Date.now();
-				results.push({
-					request: i,
-					startTime: start,
-					endTime: end,
-					statusCode: res.statusCode || 0,
-				});
-				completedRequests++;
-				resolve();
-			});
+			body: payload,
 		});
 
-		req.on('error', (error) => {
-			const end = Date.now();
-			results.push({
-				request: i,
-				startTime: start,
-				endTime: end,
-				statusCode: 0,
-			});
-			console.error(`Erro na requisição ${i}:`, error.message);
-			completedRequests++;
-			resolve();
+		const end = Date.now();
+
+		results.push({
+			request: i,
+			startTime: start,
+			endTime: end,
+			statusCode: res.status,
+		});
+	} catch (error: any) {
+		const end = Date.now();
+
+		results.push({
+			request: i,
+			startTime: start,
+			endTime: end,
+			statusCode: 0,
 		});
 
-		req.write(payload);
-		req.end();
-	});
+		console.error(`Erro na requisição ${i}:`, error.message);
+	}
+
+	completedRequests++;
 }
 
 async function runBatch(batch: number[]) {
@@ -89,7 +77,9 @@ async function runAll() {
 		await runBatch(batch);
 	}
 
-	const outputPath = path.resolve('data/raw/http-results.json');
+	const filename = `${TOTAL_REQUESTS}req-${PAYLOAD_SIZE / 1024}kb.json`;
+	const outputPath = path.resolve('data/raw/http/request-results', filename);
+
 	fs.writeFileSync(outputPath, JSON.stringify({
 		payloadSizeBytes: PAYLOAD_SIZE,
 		results,

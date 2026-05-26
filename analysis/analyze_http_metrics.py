@@ -3,143 +3,118 @@ import os
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from math import ceil
 
-# Caminhos
-raw_usage_path = 'data/raw/http-resource-usage.json'
-raw_results_path = 'data/raw/http-results.json'
-output_dir = 'data/processed/http'
-os.makedirs(output_dir, exist_ok=True)
+RAW_RESULTS_DIR = 'data/raw/http/request-results'
+RAW_USAGE_DIR = 'data/raw/http/resource-usage'
+OUTPUT_DIR = 'data/processed/http'
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# --- Carregar dados
-with open(raw_usage_path) as f:
-    usage = json.load(f)
+# Listar todos os arquivos de resultados
+for filename in os.listdir(RAW_RESULTS_DIR):
+    if not filename.endswith('.json'):
+        continue
 
-with open(raw_results_path) as f:
-    raw = json.load(f)
-    results = raw["results"]
-    payload_size = raw.get("payloadSizeBytes", 0)
+    name = filename.replace('.json', '')  # ex: 1000req-1kb
+    result_path = os.path.join(RAW_RESULTS_DIR, filename)
+    usage_path = os.path.join(RAW_USAGE_DIR, filename)
 
-# --- Extrair e normalizar tempos
-start_times = [r['startTime'] for r in results]
-end_times = [r['endTime'] for r in results]
-latency = [(e - s) for s, e in zip(start_times, end_times)]
+    if not os.path.exists(usage_path):
+        print(f'Skipping {name}, missing usage file.')
+        continue
 
-# Base de tempo (t0)
-t0 = min(start_times)
-relative_times = [(t - t0) / 1000 for t in start_times]  # em segundos
+    output_subdir = os.path.join(OUTPUT_DIR, name)
+    os.makedirs(output_subdir, exist_ok=True)
 
-# Timestamps simulados para CPU/memória
-# timestamps = list(range(len(usage)))
-# cpu = [e['cpu'] for e in usage]
-# mem = [e['memoryMB'] for e in usage]
+    with open(result_path) as f:
+        raw = json.load(f)
+        results = raw["results"]
+        payload_size = raw.get("payloadSizeBytes", 0)
 
-# # --- Estatísticas
-# total_duration = max(end_times) - min(start_times)  # ms
-# throughput_total = (len(results) / total_duration) * 1000  # req/s
+    with open(usage_path) as f:
+        usage = json.load(f)
 
-# stats = {
-#     'Throughput': f'{throughput_total:.2f} req/s',
-#     'Payload': f'{payload_size} bytes',
-#     'Latência média': f'{np.mean(latency):.2f} ms',
-#     'Latência máxima': f'{np.max(latency):.2f} ms',
-#     'Latência mínima': f'{np.min(latency):.2f} ms',
-#     'CPU média': f'{np.mean(cpu):.2f}%',
-#     'Memória média': f'{np.mean(mem):.2f} MB',
-# }
+    # --- Processar resultados de requisição
+    start_times = [r['startTime'] for r in results]
+    end_times = [r['endTime'] for r in results]
+    latency_ms = [(e - s) for s, e in zip(start_times, end_times)]
+    relative_times = [(s - min(start_times)) / 1000 for s in start_times]  # segundos
+    request_ids = [r['request'] for r in results]
 
-# # --- Exibir no terminal
-# print('\n--- Estatísticas ---')
-# for k, v in stats.items():
-#     print(f'{k}: {v}')
+    # --- Gráfico: Latência Média por Bloco de Requisições
+    n_points = 100
+    block_size = max(1, len(results) // n_points)
+    avg_request_ids = []
+    avg_latencies = []
 
-# # --- Salvar stats.txt
-# with open(f'{output_dir}/stats.txt', 'w') as f:
-#     for k, v in stats.items():
-#         f.write(f'{k}: {v}\n')
+    for i in range(0, len(results), block_size):
+        block = latency_ms[i:i + block_size]
+        block_ids = request_ids[i:i + block_size]
+        if block:
+            avg_request_ids.append(sum(block_ids) / len(block_ids))
+            avg_latencies.append(sum(block) / len(block))
 
-# --- Gráfico: Latência Média por Bloco de Requisições
-request_ids = [r['request'] for r in results]
-latency_ms = [(r['endTime'] - r['startTime']) for r in results]
+    plt.figure(figsize=(10, 4))
+    plt.plot(avg_request_ids, avg_latencies, color='orange')
+    plt.title(f'Latência Média ({block_size} req/bloco)')
+    plt.xlabel('ID Médio do Bloco')
+    plt.ylabel('Latência Média (ms)')
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(f'{output_subdir}/latency.png')
+    plt.close()
 
-n_points = 100
-block_size = max(1, len(results) // n_points)
+    # --- Gráfico: CPU
+    timestamps = [e['timestamp'] for e in usage]
+    cpu = [e['cpu'] * 100 for e in usage]  # converter para porcentagem
+    t0 = min(timestamps)
+    relative_cpu_time = [(t - t0) / 1000 for t in timestamps]
 
-avg_request_ids = []
-avg_latencies = []
+    plt.figure(figsize=(8, 4))
+    plt.plot(relative_cpu_time, cpu, color='blue')
+    plt.title('Uso de CPU (%)')
+    plt.xlabel('Tempo (s)')
+    plt.ylabel('CPU (%)')
+    plt.grid(True)
 
-for i in range(0, len(results), block_size):
-    block_ids = request_ids[i:i+block_size]
-    block_latencies = latency_ms[i:i+block_size]
-    if block_ids and block_latencies:
-        avg_request_ids.append(sum(block_ids) / len(block_ids))
-        avg_latencies.append(sum(block_latencies) / len(block_latencies))
+    max_cpu = max(cpu)
+    max_idx = cpu.index(max_cpu)
+    plt.annotate(f'{max_cpu:.2f}%', (relative_cpu_time[max_idx], max_cpu), textcoords="offset points", xytext=(0, 10), ha='center', fontsize=8)
 
-plt.figure(figsize=(10, 4))
-plt.plot(avg_request_ids, avg_latencies, color='orange')
-plt.title(f'Latência Média a cada {block_size} Requisições')
-plt.xlabel('ID Médio do Bloco de Requisições')
-plt.ylabel('Latência Média (ms)')
-plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(f'{output_subdir}/cpu.png')
+    plt.close()
 
-plt.tight_layout()
-plt.savefig(f'{output_dir}/latency.png')
-plt.close()
+    # --- Gráfico: Memória
+    mem = [e['memoryMB'] for e in usage]
 
-# --- Gráfico: CPU
-timestamps_raw = [e['timestamp'] for e in usage]
-t0 = min(timestamps_raw)
-relative_cpu_time = [(t - t0) / 1000 for t in timestamps_raw]
-usage_timestamps = [(e['timestamp'] - t0) / 1000 for e in usage]
-cpu = [e['cpu'] for e in usage]
+    plt.figure(figsize=(8, 4))
+    plt.plot(relative_cpu_time, mem, color='green')
+    plt.title('Uso de Memória (MB)')
+    plt.xlabel('Tempo (s)')
+    plt.ylabel('Memória (MB)')
+    plt.grid(True)
 
-plt.figure(figsize=(8, 4))
-plt.plot(usage_timestamps, cpu, color='blue')
-plt.title('Uso de CPU (%) ao Longo do Tempo')
-plt.xlabel('Tempo (s)')
-plt.ylabel('CPU (%)')
-plt.grid(True)
+    max_mem = max(mem)
+    max_idx = mem.index(max_mem)
+    plt.annotate(f'{max_mem:.2f} MB', (relative_cpu_time[max_idx], max_mem), textcoords="offset points", xytext=(0, 10), ha='center', fontsize=8)
 
-max_cpu = max(cpu)
-max_idx = cpu.index(max_cpu)
-plt.annotate(f'{max_cpu:.2f}%', (relative_cpu_time[max_idx], max_cpu), textcoords="offset points", xytext=(0, 10), ha='center', fontsize=8)
+    plt.tight_layout()
+    plt.savefig(f'{output_subdir}/memory.png')
+    plt.close()
 
-plt.tight_layout()
-plt.savefig(f'{output_dir}/cpu.png')
-plt.close()
+    # --- Gráfico: Throughput
+    df = pd.DataFrame({'relative_time': relative_times})
+    df['time_block'] = (df['relative_time']).astype(int)
+    throughput_block = df.groupby('time_block').size()
 
-# --- Gráfico: Memória
-mem = [e['memoryMB'] for e in usage]
+    plt.figure(figsize=(10, 4))
+    plt.plot(throughput_block.index, throughput_block.values, color='purple')
+    plt.title('Throughput (Requisições por Segundo)')
+    plt.xlabel('Tempo (s)')
+    plt.ylabel('Req/s')
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(f'{output_subdir}/throughput.png')
+    plt.close()
 
-plt.figure(figsize=(8, 4))
-plt.plot(usage_timestamps, mem, color='green')
-plt.title('Uso de Memória (MB) ao Longo do Tempo')
-plt.xlabel('Tempo (s)')
-plt.ylabel('Memória (MB)')
-plt.grid(True)
-
-max_mem = max(mem)
-max_idx = mem.index(max_mem)
-plt.annotate(f'{max_mem:.2f} MB', (relative_cpu_time[max_idx], max_mem), textcoords="offset points", xytext=(0, 10), ha='center', fontsize=8)
-
-plt.tight_layout()
-plt.savefig(f'{output_dir}/memory.png')
-plt.close()
-
-# --- Gráfico: Throughput (agrupado por bloco de 5s)
-df = pd.DataFrame({'relative_time': relative_times})
-df['time_block'] = (df['relative_time']).astype(int)  # (df['relative_time'] // X).astype(int) * X
-throughput_block = df.groupby('time_block').size()
-
-plt.figure(figsize=(10, 4))
-plt.plot(throughput_block.index, throughput_block.values, color='purple')
-plt.title('Throughput')
-plt.xlabel('Tempo (s)')
-plt.ylabel('Requisições por Segundo')
-plt.grid(True)
-
-plt.tight_layout()
-plt.savefig(f'{output_dir}/throughput.png')
-plt.close()
-
-print(f'Gráficos e estatísticas salvos em: {output_dir}')
+    print(f'Gráficos salvos em: {output_subdir}')
