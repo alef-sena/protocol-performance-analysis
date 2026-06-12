@@ -6,11 +6,12 @@ import pandas as pd
 import re
 
 RAW_DATA_DIR = 'data/raw'
-PROCESSED_RUNS_DIR = 'data/processed/http/runs'
-PROCESSED_AGGREGATES_DIR = 'data/processed/http/aggregates'
-PROCESSED_COMPARISONS_DIR = 'data/processed/http/comparisons'
-REQUEST_RESULTS_FILE = 'request_results.json'
-RESOURCE_USAGE_FILE = 'resource_usage.json'
+PROCESSED_DIR = 'data/processed'
+PROCESSED_RUNS_DIR = os.path.join(PROCESSED_DIR, 'runs')
+PROCESSED_AGGREGATES_DIR = os.path.join(PROCESSED_DIR, 'aggregates')
+PROCESSED_COMPARISONS_DIR = os.path.join(PROCESSED_DIR, 'comparisons')
+REQUEST_RESULTS_FILE = 'request-results.json'
+RESOURCE_USAGE_FILE = 'resource-usage.json'
 SUMMARY_FILE = 'summary.json'
 GLOBAL_SUMMARY_FILE = 'global_summary.json'
 
@@ -52,14 +53,15 @@ def load_all_global_summaries():
 	summaries = {}
 
 	scenarios = sorted(
-		os.listdir(PROCESSED_AGGREGATES_DIR)
+		os.listdir(PROCESSED_AGGREGATES_DIR),
+		key=scenario_sort_key
 	)
 
 	for scenario in scenarios:
 		summary_path = os.path.join(
 			PROCESSED_AGGREGATES_DIR,
 			scenario,
-			'GLOBAL_SUMMARY_FILE'
+			GLOBAL_SUMMARY_FILE
 		)
 
 		if not os.path.exists(summary_path):
@@ -82,7 +84,7 @@ def save_comparison_summary(comparison_summary):
 	save_json(
 		os.path.join(
 			PROCESSED_COMPARISONS_DIR,
-			'comparison-SUMMARY_FILE'
+			f'comparison-{SUMMARY_FILE}'
 		),
 		comparison_summary
 	)
@@ -145,6 +147,9 @@ def calculate_global_summary(summary_data):
 	global_summary = {}
 
 	for protocol, runs in summary_data.items():
+
+		# if not runs:
+		# 	continue
 
 		metrics = {
 			'avgLatencyMs': [],
@@ -306,7 +311,7 @@ def create_cpu_graph(usage, output_path):
 		color='blue'
 	)
 
-	plt.title('Uso de CPU (%)')
+	plt.title('Uso de CPU (100% = 1 núcleo lógico)')
 	plt.xlabel('Tempo (s)')
 	plt.ylabel('CPU (%)')
 	plt.grid(True)
@@ -478,12 +483,12 @@ def create_metric_comparison_graph(
 def process_run(run_dir, output_dir):
 	request_results_path = os.path.join(
 		run_dir,
-		'REQUEST_RESULTS_FILE'
+		REQUEST_RESULTS_FILE
 	)
 
 	resource_usage_path = os.path.join(
 		run_dir,
-		'RESOURCE_USAGE_FILE'
+		RESOURCE_USAGE_FILE
 	)
 
 	if not os.path.exists(request_results_path):
@@ -609,7 +614,7 @@ def process_scenario(scenario):
 
 	summary_output_path = os.path.join(
 		aggregate_dir,
-		'SUMMARY_FILE'
+		SUMMARY_FILE
 	)
 
 	save_json(
@@ -623,7 +628,7 @@ def process_scenario(scenario):
 
 	global_summary_output_path = os.path.join(
 		aggregate_dir,
-		'GLOBAL_SUMMARY_FILE'
+		GLOBAL_SUMMARY_FILE
 	)
 
 	save_json(
@@ -693,7 +698,7 @@ def main():
 			comparison_summary,
 			protocol,
 			'avgCpuPercent',
-			f'Uso de CPU (%)',
+			f'Uso de CPU (100% = 1 núcleo lógico)',
 			'CPU (%)',
 			f'cpu-comparison-{protocol}.png',
 			'blue'

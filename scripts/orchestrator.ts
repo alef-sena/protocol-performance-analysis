@@ -4,170 +4,349 @@ import path from 'path';
 import fs from 'fs';
 import Docker from 'dockerode';
 
-const RAW_DATA_DIR = path.resolve('data/raw/http');
-const docker = new Docker();
+const PROTOCOLS: Protocol[] = [
+	// 'http',
+	'websocket',
+];
+const PROTOCOL_CONFIG = {
+	http: {
+		serverContainerName: 'http-server',
+		clientContainerName: 'http-client',
+		clientScript: 'protocols/http/client.ts',
+		target: 'http-server:3000',
+		healthUrl: 'http://localhost:3000/health',
+	},
+
+	websocket: {
+		serverContainerName: 'websocket-server',
+		clientContainerName: 'websocket-client',
+		clientScript: 'protocols/websocket/client.ts',
+		target: 'ws://websocket-server:3000',
+		healthUrl: 'http://localhost:3000/health',
+	},
+} as const;
+type Protocol = keyof typeof PROTOCOL_CONFIG;
+const RAW_DATA_DIR = path.resolve('data/raw');
+// const docker = new Docker();
 
 function sleep(ms: number) {
-  return new Promise(resolve => setTimeout(resolve, ms));
+	return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-async function collectContainerStats(containerName: string, intervalMs: number, collectingFlag: () => boolean): Promise<any[]> {
-  const stats = [];
-  const container = docker.getContainer(containerName);
+async function collectContainerStats(
+	containerName: string,
+	intervalMs: number,
+	collectingFlag: () => boolean
+): Promise<any[]> {
+	const stats: {
+		timestamp: number;
+		cpuPercent: number;
+		memoryMB: number;
+	}[] = [];
 
-  while (collectingFlag()) {
-    const stat = await container.stats({ stream: false });
-    const cpuDelta = stat.cpu_stats.cpu_usage.total_usage - stat.precpu_stats.cpu_usage.total_usage;
-    const systemDelta = stat.cpu_stats.system_cpu_usage - stat.precpu_stats.system_cpu_usage;
-    const cpu = (systemDelta > 0 && cpuDelta > 0) ? (cpuDelta / systemDelta) * stat.cpu_stats.online_cpus : 0;
+	while (collectingFlag()) {
+		try {
+			const output = execSync(
+				`docker stats --no-stream --format "{{.CPUPerc}};{{.MemUsage}}" ${containerName}`
+			)
+				.toString()
+				.trim();
 
-    const memoryMB = stat.memory_stats.usage / 1024 / 1024;
-    stats.push({ timestamp: Date.now(), cpu, memoryMB });
+			const [cpuText, memoryText] = output.split(';');
 
-    await sleep(intervalMs);
-  }
+			const cpuPercent = parseFloat(
+				cpuText.replace('%', '').replace(',', '.')
+			);
 
-  return stats;
+			const memoryUsed = memoryText.split('/')[0].trim();
+
+			let memoryMB = 0;
+
+			if (memoryUsed.endsWith('MiB')) {
+				memoryMB = parseFloat(memoryUsed.replace('MiB', ''));
+			} else if (memoryUsed.endsWith('GiB')) {
+				memoryMB =
+					parseFloat(memoryUsed.replace('GiB', '')) * 1024;
+			} else if (memoryUsed.endsWith('KiB')) {
+				memoryMB =
+					parseFloat(memoryUsed.replace('KiB', '')) / 1024;
+			} else if (memoryUsed.endsWith('B')) {
+				memoryMB =
+					parseFloat(memoryUsed.replace('B', '')) /
+					1024 /
+					1024;
+			}
+
+			stats.push({
+				timestamp: Date.now(),
+				cpuPercent,
+				memoryMB,
+			});
+		} catch (error) {
+			console.error(
+				`Erro ao coletar métricas do container ${containerName}:`,
+				error
+			);
+		}
+
+		await sleep(intervalMs);
+	}
+
+	return stats;
 }
 
-function runDockerComposeUp(): Promise<void> {
-  return new Promise((resolve, reject) => {
-    console.log('Subindo servidor...');
-    const up = spawn('docker', ['compose', 'up', '-d', 'http-server'], { stdio: 'inherit' });
+function runDockerComposeUp(protocol: Protocol): Promise<void> {
+	return new Promise((resolve, reject) => {
+		console.log(`Subindo servidor ${PROTOCOL_CONFIG[protocol].serverContainerName}...`);
+		const up = spawn(
+			'docker',
+			[
+				'compose',
+				'up',
+				'-d',
+				PROTOCOL_CONFIG[protocol].serverContainerName,
+				PROTOCOL_CONFIG[protocol].clientContainerName
+			],
+			{ stdio: 'inherit' }
+		);
 
-    up.on('close', (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`docker compose up terminou com código ${code}`));
-    });
-  });
+		up.on('close', (code) => {
+			if (code === 0) resolve();
+			else reject(new Error(`docker compose up terminou com código ${code}`));
+		});
+	});
 }
 
 function waitForContainerRunning(containerName: string, timeoutMs = 10000): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const start = Date.now();
-    const interval = setInterval(() => {
-      const status = spawnSync('docker', ['inspect', '-f', '{{.State.Running}}', containerName]);
-      const isRunning = status.stdout.toString().trim() === 'true';
+	return new Promise((resolve, reject) => {
+		const start = Date.now();
+		const interval = setInterval(() => {
+			const status = spawnSync('docker', ['inspect', '-f', '{{.State.Running}}', containerName]);
+			const isRunning = status.stdout.toString().trim() === 'true';
 
-      if (isRunning) {
-        clearInterval(interval);
-        resolve();
-      } else if (Date.now() - start > timeoutMs) {
-        clearInterval(interval);
-        reject(new Error(`Timeout: ${containerName} não ficou pronto`));
-      }
-    }, 500);
-  });
+			if (isRunning) {
+				clearInterval(interval);
+				resolve();
+			} else if (Date.now() - start > timeoutMs) {
+				clearInterval(interval);
+				reject(new Error(`Timeout: ${containerName} não ficou pronto`));
+			}
+		}, 500);
+	});
 }
 
 function waitForServerHealth(url: string, timeoutMs = 10000): Promise<void> {
-  console.log('Aguardando servidor responder...');
-  return new Promise((resolve, reject) => {
-    const start = Date.now();
+	console.log('Aguardando servidor responder...');
+	return new Promise((resolve, reject) => {
+		const start = Date.now();
 
-    const check = () => {
-      http.get(url, (res) => {
-        if (res.statusCode === 200) {
-          console.log('Servidor OK');
-          resolve();
-        } else {
-          retry();
-        }
-      }).on('error', retry);
-    };
+		const check = () => {
+			http.get(url, (res) => {
+				if (res.statusCode === 200) {
+					console.log('Servidor OK');
+					resolve();
+				} else {
+					retry();
+				}
+			}).on('error', retry);
+		};
 
-    const retry = () => {
-      if (Date.now() - start > timeoutMs) {
-        reject(new Error('Tempo limite ao aguardar o servidor.'));
-      } else {
-        setTimeout(check, 500);
-      }
-    };
+		const retry = () => {
+			if (Date.now() - start > timeoutMs) {
+				reject(new Error('Tempo limite ao aguardar o servidor.'));
+			} else {
+				setTimeout(check, 500);
+			}
+		};
 
-    check();
-  });
+		check();
+	});
 }
 
 function cleanupDocker() {
-  console.log('Limpando containers...\n');
-  try {
-    execSync('docker compose down --remove-orphans', { stdio: 'inherit' });
-    console.log('Containers removidos\n');
-  } catch (err) {
-    console.error('Erro ao remover containers:', err);
-  }
+	console.log('Limpando containers...\n');
+	try {
+		execSync('docker compose down --remove-orphans', { stdio: 'inherit' });
+		console.log('Containers removidos\n');
+	} catch (err) {
+		console.error('Erro ao remover containers:', err);
+	}
 }
 
 function runPythonAnalysis(): void {
-  console.log('Todos os testes concluídos. Executando análise de métricas...');
-  try {
-    execSync('python3 analysis/analyze_http_metrics.py', { stdio: 'inherit' });
-  } catch (err) {
-    console.error('Erro ao executar script de análise:', err);
-  }
+	console.log('Todos os testes concluídos. Executando análise de métricas...');
+	try {
+		execSync('python3 analysis/analyze_metrics.py', { stdio: 'inherit' });
+	} catch (err) {
+		console.error('Erro ao executar script de análise:', err);
+	}
 }
 
-function runClientScript(requests: number, payloadKB: number): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const env = {
-      ...process.env,
-      TOTAL_REQUESTS: String(requests),
-      PAYLOAD_KB: String(payloadKB),
-      TARGET: 'localhost:3000',
-    };
+function runClientContainer(
+	requests: number,
+	payloadKB: number,
+	concurrency: number,
+	requestTimeoutMs: number,
+	requestResultsPathContainer: string,
+	protocol: Protocol
+): Promise<void> {
+	return new Promise((resolve, reject) => {
 
-    const child = spawn('npx', ['ts-node', 'protocols/http/client.ts'], {
-      env,
-      stdio: 'inherit',
-    });
+		const child = spawn(
+			'docker',
+			[
+				'exec',
+				'-e',
+				`TOTAL_REQUESTS=${requests}`,
+				'-e',
+				`PAYLOAD_KB=${payloadKB}`,
+				`-e`,
+				`CONCURRENCY=${concurrency}`,
+				`-e`,
+				`REQUEST_TIMEOUT_MS=${requestTimeoutMs}`,
+				'-e',
+				`TARGET=${PROTOCOL_CONFIG[protocol].target}`,
+				'-e',
+				`OUTPUT_PATH=${requestResultsPathContainer}`,
+				PROTOCOL_CONFIG[protocol].clientContainerName,
+				'npx',
+				'ts-node',
+				PROTOCOL_CONFIG[protocol].clientScript
+			],
+			{
+				stdio: 'inherit'
+			}
+		);
 
-    child.on('close', (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`Client saiu com código ${code}`));
-    });
-  });
+		child.on('close', (code) => {
+			if (code === 0) {
+				resolve();
+			} else {
+				reject(
+					new Error(
+						`Client container saiu com código ${code}`
+					)
+				);
+			}
+		});
+	});
 }
 
 async function orchestrate() {
-  const workloadPath = path.resolve(__dirname, '../config/http-workload.json');
-  const workloadConfig = JSON.parse(fs.readFileSync(workloadPath, 'utf-8'));
+	const settingsPath = path.resolve(__dirname,'../config/test-settings.json');
 
-  for (const config of workloadConfig) {
-    const { requests, payloadKB } = config;
+	const testSettings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
 
-    try {
-      await runDockerComposeUp();
-      await waitForContainerRunning('http-server', 10000);
-      await waitForServerHealth('http://localhost:3000/health', 20000);
+	const repetitions = testSettings.repetitions || 1;
 
-      console.log(`Executando teste: [${requests} requisições, ${payloadKB} KB]. Aguarde...`);
+	const resourceCollectionIntervalMs = testSettings.resourceCollectionIntervalMs || 1000;
 
-      let collecting = true;
-      const collectingFlag = () => collecting;
+	const waitAfterStartupMs = testSettings.waitAfterStartupMs || 0;
 
-      const statsPromise = collectContainerStats('http-server', 1000, collectingFlag);
+	const requestTimeoutMs = testSettings.requestTimeoutMs || 5000;
 
-      await runClientScript(requests, payloadKB);
-      collecting = false;
+	const workloadPath = path.resolve(__dirname,'../config/workload.json');
 
-      const metrics = await statsPromise;
+	const workloadConfig = JSON.parse(fs.readFileSync(workloadPath, 'utf-8'));
 
-      const resourcesFilename = `resource-usage/${requests}req-${payloadKB}kb.json`;
-      const resourcePath = path.join(RAW_DATA_DIR, resourcesFilename);
+	console.log('\nCargas de trabalho identificadas:\n');
 
-      if (!fs.existsSync(path.dirname(resourcePath))) fs.mkdirSync(path.dirname(resourcePath), { recursive: true });
+	workloadConfig.forEach(
+		(
+			workload: {
+				requests: number;
+				payloadKB: number;
+				concurrency: number;
+			},
+			index: number
+		) => {
+			console.log(
+				`${index + 1}. ` +
+				`${workload.requests} req | ` +
+				`${workload.payloadKB} KB | ` +
+				`concorrência ${workload.concurrency}`
+			);
+		}
+	);
 
-      fs.writeFileSync(resourcePath, JSON.stringify(metrics, null, 2));
-      console.log(`Métricas de uso de recursos salvas em ${resourcePath}`);
-    } catch (err) {
-      console.error('Erro durante o teste:', err);
-    } finally {
-      cleanupDocker();
-    }
-  }
+	console.log('');
 
-  runPythonAnalysis();
-  console.log('\nTodas as análises foram concluídas.');
+	for (const workload of workloadConfig) {
+		const {
+			requests,
+			payloadKB,
+			concurrency = 1
+		} = workload;
+
+		for (let run = 1; run <= repetitions; run++) {
+
+			for (const protocol of PROTOCOLS) {
+				const scenarioName = `${requests}req-${payloadKB}kb-${concurrency}conc`;
+				const runName = `run-${run}`;
+				const scenarioDir = path.join(RAW_DATA_DIR,scenarioName,runName,protocol);
+
+				const requestResultsPathHost = path.join(
+					scenarioDir,
+					'request-results.json'
+				);
+
+				const requestResultsPathContainer = requestResultsPathHost.replace(
+					path.resolve('data'),
+					'/app/data'
+				);
+
+				const resourceUsagePath = path.join(scenarioDir,'resource-usage.json');
+
+				try {
+					console.log(`\n[RUN ${run}/${repetitions}] ${scenarioName}`);
+
+					fs.mkdirSync(scenarioDir, {recursive: true,});
+
+					await runDockerComposeUp(protocol);
+					await waitForContainerRunning(PROTOCOL_CONFIG[protocol].serverContainerName, 10000);
+					await waitForContainerRunning(PROTOCOL_CONFIG[protocol].clientContainerName, 10000);
+
+					const healthUrl = PROTOCOL_CONFIG[protocol].healthUrl;
+
+					if (healthUrl) {
+						await waitForServerHealth(healthUrl,20000);
+					}
+
+					if (waitAfterStartupMs > 0) {
+						console.log(`Aguardando ${waitAfterStartupMs}ms antes do início do teste...`);
+						await sleep(waitAfterStartupMs);
+					}
+
+					console.log(`Executando teste: [${requests} requisições, ${payloadKB} KB, concorrência ${concurrency}]. Aguarde...`);
+
+					let collecting = true;
+					const collectingFlag = () => collecting;
+					const statsPromise = collectContainerStats(PROTOCOL_CONFIG[protocol].serverContainerName, resourceCollectionIntervalMs, collectingFlag);
+
+					await runClientContainer(requests, payloadKB, concurrency, requestTimeoutMs, requestResultsPathContainer, protocol);
+
+					console.log(`Teste: [${requests} requisições, ${payloadKB} KB] finalizado!`);
+
+					collecting = false;
+
+					const metrics = await statsPromise;
+
+					fs.writeFileSync(resourceUsagePath,JSON.stringify(metrics, null, 2));
+
+					console.log(`Uso de recursos computacionais salvo em ${resourceUsagePath}`);
+
+				} catch (err) {
+					console.error(`Erro durante ${runName}:`,err);
+				} finally {
+					cleanupDocker();
+				}
+			}
+		}
+	}
+
+	runPythonAnalysis();
+
+	console.log('\nTodas as análises foram concluídas.');
 }
 
 orchestrate();
