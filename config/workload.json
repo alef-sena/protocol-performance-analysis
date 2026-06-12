@@ -1,0 +1,4 @@
+[
+  { "requests": 100000, "payloadKB": 1, "concurrency": 1 },
+  { "requests": 100000, "payloadKB": 1, "concurrency": 100 }
+]

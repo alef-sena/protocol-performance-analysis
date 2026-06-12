@@ -1,0 +1,7 @@
+{
+  "repetitions": 1,
+  "resourceCollectionIntervalMs": 200,
+  "cleanupBeforeRun": true,
+  "waitAfterStartupMs": 2000,
+  "requestTimeoutMs": 5000
+}
