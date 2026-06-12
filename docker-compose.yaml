@@ -22,8 +22,6 @@ services:
       - testnet
     volumes:
       - ./data:/app/data
-      - ./scripts:/app/scripts
-      - ./protocols:/app/protocols
 
 networks:
   testnet:

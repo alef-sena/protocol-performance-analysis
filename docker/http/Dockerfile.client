@@ -6,4 +6,4 @@ COPY . .
 
 RUN npm install
 
-CMD ["npx", "ts-node", "protocols/http/client.ts"]
+CMD ["tail", "-f", "/dev/null"]

@@ -19,7 +19,7 @@ npx ts-node scripts/orchestrator.ts
 # docker compose up --build
 docker compose up -d http-server
 docker compose run --rm http-client
-python3 analysis/analyze_http_metrics.py
+python3 analysis/analyze_metrics.py
 ```
 
 Isso irá:
@@ -41,6 +41,82 @@ O script salva normalmente os dados no data/raw/http/results.json
 # executar testes
 npm run http:test
 
-# criar gráficos de métricas em data/processed/http
-python3 analysis/analyze_http_metrics.py
+# criar gráficos de métricas em data/processed
+python3 analysis/analyze_metrics.py
 ```
+
+## Estrutura
+
+```sh
+.
+├── LICENSE
+├── README.md
+├── analysis
+│   └── analyze_metrics.py
+├── config
+│   ├── test-settings.json
+│   └── workload.json
+├── data
+│   ├── processed
+│   │   └── http
+│   │       ├── aggregates
+│   │       │   ├── <XXX>req-<YYY>kb-<ZZZ>conc
+│   │       │   │   ├── global-summary.json
+│   │       │   │   └── summary.json
+│   │       ├── comparisons
+│   │       │   ├── comparison-summary.json
+│   │       │   ├── cpu-comparison-http.png
+│   │       │   ├── latency-comparison-http.png
+│   │       │   ├── memory-comparison-http.png
+│   │       │   ├── p50-comparison-http.png
+│   │       │   ├── p95-comparison-http.png
+│   │       │   ├── p99-comparison-http.png
+│   │       │   └── throughput-comparison-http.png
+│   │       └── runs
+│   │           └── <XXX>req-<YYY>kb-<ZZZ>conc
+│   │               └── run-1
+│   │                   └── http
+│   │                       ├── cpu.png
+│   │                       ├── latency.png
+│   │                       ├── memory.png
+│   │                       └── throughput.png
+│   └── raw
+│       └── <XXX>req-<YYY>kb-<ZZZ>conc
+│           └── run-<N>
+│               └── http
+│                   ├── request-results.json
+│                   └── resource-usage.json
+├── docker
+│   ├── grpc
+│   ├── http
+│   │   ├── Dockerfile.client
+│   │   └── Dockerfile.server
+│   ├── mqtt
+│   ├── rabbitmq
+│   └── websocket
+├── docker-compose.yaml
+├── docs
+├── package-lock.json
+├── package.json
+├── protocols
+│   ├── grpc
+│   ├── http
+│   │   ├── client.ts
+│   │   └── server.ts
+│   ├── mqtt
+│   ├── rabbitmq
+│   └── websocket
+├── scripts
+│   ├── collect-container-stats.ts
+│   ├── orchestrator.ts
+│   └── run-autocannon.ts
+└── tsconfig.json
+```
+
+## Funcionamento
+
+O benchmark é executado pelos clients localizados em:
+
+protocols/<protocolo>/client.ts
+
+O orchestrator é responsável apenas pela orquestração dos testes.

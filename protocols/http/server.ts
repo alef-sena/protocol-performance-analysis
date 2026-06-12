@@ -4,7 +4,7 @@ import path from 'path';
 
 const PORT = process.env.PORT || 3000;
 
-const resourceUsage: { timestamp: number; cpu: number; memoryMB: number }[] = [];
+// const resourceUsage: { timestamp: number; cpu: number; memoryMB: number }[] = [];
 
 const server = http.createServer((req, res) => {
 	if (req.method === 'POST' && req.url === '/process') {
@@ -36,7 +36,7 @@ const server = http.createServer((req, res) => {
 
 server.listen(PORT, () => {
 	console.log(`Servidor HTTP rodando na porta ${PORT}`);
-	startMonitoring();
+	// startMonitoring();
 });
 
 const usageOutPath = path.resolve('data/raw/http/resource-usage.json');
@@ -44,37 +44,37 @@ let cpuStart = process.cpuUsage();
 let timeStart = Date.now();
 let monitorInterval: NodeJS.Timeout;
 
-function startMonitoring() {
-	monitorInterval = setInterval(() => {
-		const cpuNow = process.cpuUsage(cpuStart);
-		const timeNow = Date.now();
-		const elapsedTime = timeNow - timeStart;
+// function startMonitoring() {
+// 	monitorInterval = setInterval(() => {
+// 		const cpuNow = process.cpuUsage(cpuStart);
+// 		const timeNow = Date.now();
+// 		const elapsedTime = timeNow - timeStart;
 
-		const userCPU = cpuNow.user / 1000;
-		const systemCPU = cpuNow.system / 1000;
-		const totalCPU = userCPU + systemCPU;
-		const cpuPercent = (totalCPU / elapsedTime) * 100;
+// 		const userCPU = cpuNow.user / 1000;
+// 		const systemCPU = cpuNow.system / 1000;
+// 		const totalCPU = userCPU + systemCPU;
+// 		const cpuPercent = (totalCPU / elapsedTime) * 100;
 
-		resourceUsage.push({
-			timestamp: timeNow,
-			cpu: cpuPercent,
-			memoryMB: process.memoryUsage().rss / 1024 / 1024,
-		});
+// 		resourceUsage.push({
+// 			timestamp: timeNow,
+// 			cpu: cpuPercent,
+// 			memoryMB: process.memoryUsage().rss / 1024 / 1024,
+// 		});
 
-		cpuStart = process.cpuUsage();
-		timeStart = timeNow;
-	}, 1000);
-}
+// 		cpuStart = process.cpuUsage();
+// 		timeStart = timeNow;
+// 	}, 1000);
+// }
 
-function stopMonitoringAndSave() {
-	clearInterval(monitorInterval);
-	fs.writeFileSync(usageOutPath, JSON.stringify(resourceUsage, null, 2));
-	console.log(`Uso de recursos salvo em ${usageOutPath}`);
-}
+// function stopMonitoringAndSave() {
+// 	clearInterval(monitorInterval);
+// 	fs.writeFileSync(usageOutPath, JSON.stringify(resourceUsage, null, 2));
+// 	console.log(`Uso de recursos salvo em ${usageOutPath}`);
+// }
 
 const shutdown = () => {
 	console.log('Encerrando servidor HTTP...');
-	stopMonitoringAndSave();
+	// stopMonitoringAndSave();
 	server.close(() => {
 		console.log('Servidor HTTP finalizado.');
 		process.exit(0);
