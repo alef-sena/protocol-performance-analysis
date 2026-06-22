@@ -5,8 +5,9 @@ import fs from 'fs';
 import Docker from 'dockerode';
 
 const PROTOCOLS: Protocol[] = [
-	// 'http',
+	'http',
 	'websocket',
+	'grpc',
 ];
 const PROTOCOL_CONFIG = {
 	http: {
@@ -24,8 +25,17 @@ const PROTOCOL_CONFIG = {
 		target: 'ws://websocket-server:3000',
 		healthUrl: 'http://localhost:3000/health',
 	},
+
+	grpc: {
+		serverContainerName: 'grpc-server',
+		clientContainerName: 'grpc-client',
+		clientScript: 'protocols/grpc/client.ts',
+		target: 'grpc-server:50051',
+		healthUrl: '',
+	},
 } as const;
 type Protocol = keyof typeof PROTOCOL_CONFIG;
+type WorkLoad = { requests: number; payloadKB: number; concurrency: number; }[]
 const RAW_DATA_DIR = path.resolve('data/raw');
 // const docker = new Docker();
 
@@ -163,6 +173,19 @@ function waitForServerHealth(url: string, timeoutMs = 10000): Promise<void> {
 	});
 }
 
+function waitForGrpcServer(
+	containerName: string,
+	timeoutMs = 10000
+): Promise<void> {
+
+	console.log('Aguardando servidor gRPC responder...');
+
+	return waitForContainerRunning(
+		containerName,
+		timeoutMs
+	);
+}
+
 function cleanupDocker() {
 	console.log('Limpando containers...\n');
 	try {
@@ -173,10 +196,11 @@ function cleanupDocker() {
 	}
 }
 
-function runPythonAnalysis(): void {
-	console.log('Todos os testes concluídos. Executando análise de métricas...');
+async function runPythonAnalysis(): Promise<void> {
+	console.log('Todos os testes concluídos. Executando análise de métricas...\n');
 	try {
-		execSync('python3 analysis/analyze_metrics.py', { stdio: 'inherit' });
+		await execSync('python3 analysis/analyze_metrics.py', { stdio: 'inherit' });
+		console.log('\nTodas as análises foram concluídas.');
 	} catch (err) {
 		console.error('Erro ao executar script de análise:', err);
 	}
@@ -232,25 +256,7 @@ function runClientContainer(
 	});
 }
 
-async function orchestrate() {
-	const settingsPath = path.resolve(__dirname,'../config/test-settings.json');
-
-	const testSettings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
-
-	const repetitions = testSettings.repetitions || 1;
-
-	const resourceCollectionIntervalMs = testSettings.resourceCollectionIntervalMs || 1000;
-
-	const waitAfterStartupMs = testSettings.waitAfterStartupMs || 0;
-
-	const requestTimeoutMs = testSettings.requestTimeoutMs || 5000;
-
-	const workloadPath = path.resolve(__dirname,'../config/workload.json');
-
-	const workloadConfig = JSON.parse(fs.readFileSync(workloadPath, 'utf-8'));
-
-	console.log('\nCargas de trabalho identificadas:\n');
-
+function showWorkload(workloadConfig: WorkLoad) {
 	workloadConfig.forEach(
 		(
 			workload: {
@@ -270,6 +276,57 @@ async function orchestrate() {
 	);
 
 	console.log('');
+}
+
+async function cleanDataDirectories() {
+	const rawDir = path.resolve(__dirname, '../data/raw');
+	const processedDir = path.resolve(__dirname, '../data/processed');
+
+	console.log('Limpando diretórios de dados...');
+
+	fs.rmSync(rawDir, {
+		recursive: true,
+		force: true
+	});
+
+	fs.rmSync(processedDir, {
+		recursive: true,
+		force: true
+	});
+
+	fs.mkdirSync(rawDir, {
+		recursive: true
+	});
+
+	fs.mkdirSync(processedDir, {
+		recursive: true
+	});
+
+	console.log('Diretórios limpos.\n');
+}
+
+async function orchestrate() {
+	await cleanDataDirectories()
+
+	const settingsPath = path.resolve(__dirname,'../config/test-settings.json');
+
+	const testSettings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+
+	const repetitions = testSettings.repetitions || 1;
+
+	const resourceCollectionIntervalMs = testSettings.resourceCollectionIntervalMs || 1000;
+
+	const waitAfterStartupMs = testSettings.waitAfterStartupMs || 0;
+
+	const requestTimeoutMs = testSettings.requestTimeoutMs || 5000;
+
+	const workloadPath = path.resolve(__dirname,'../config/workload.json');
+
+	const workloadConfig = JSON.parse(fs.readFileSync(workloadPath, 'utf-8'));
+
+	console.log('\nCargas de trabalho identificadas:\n');
+
+	showWorkload(workloadConfig)
 
 	for (const workload of workloadConfig) {
 		const {
@@ -308,8 +365,10 @@ async function orchestrate() {
 
 					const healthUrl = PROTOCOL_CONFIG[protocol].healthUrl;
 
-					if (healthUrl) {
-						await waitForServerHealth(healthUrl,20000);
+					if (protocol === 'grpc') {
+						await waitForGrpcServer(PROTOCOL_CONFIG[protocol].serverContainerName);
+					} else {
+						await waitForServerHealth(healthUrl);
 					}
 
 					if (waitAfterStartupMs > 0) {
@@ -346,7 +405,6 @@ async function orchestrate() {
 
 	runPythonAnalysis();
 
-	console.log('\nTodas as análises foram concluídas.');
 }
 
 orchestrate();

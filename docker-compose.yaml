@@ -19,7 +19,7 @@ services:
     depends_on:
       - http-server
     environment:
-      - TARGET=http-server:3000
+      TARGET: http-server:3000
     volumes:
       - ./data:/app/data
 
@@ -43,7 +43,35 @@ services:
     depends_on:
       - websocket-server
     environment:
-      - TARGET=websocket-server:3000
+      TARGET: websocket-server:3000
+    volumes:
+      - ./data:/app/data
+
+  grpc-server:
+    container_name: grpc-server
+    build:
+      context: .
+      dockerfile: docker/grpc/Dockerfile.server
+    networks:
+      - testnet
+    ports:
+      - "50051:50051"
+
+  grpc-client:
+    container_name: grpc-client
+    build:
+      context: .
+      dockerfile: docker/grpc/Dockerfile.client
+    networks:
+      - testnet
+    depends_on:
+      - grpc-server
+    environment:
+      TARGET: grpc-server:50051
+      PAYLOAD_KB: 1
+      TOTAL_REQUESTS: 1
+      CONCURRENCY: 1
+      OUTPUT_PATH: /app/data/raw/test/request-results.json
     volumes:
       - ./data:/app/data
 

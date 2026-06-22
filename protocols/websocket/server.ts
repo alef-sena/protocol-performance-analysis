@@ -25,7 +25,7 @@ wss.on('connection', (socket) => {
 
 		socket.send(JSON.stringify({
 			id: data.id,
-			received: data,
+			message: data.message,
 			timestamp: Date.now()
 		}));
 	});

@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package benchmark;
+
+service BenchmarkService {
+	rpc SendMessage(BenchmarkRequest)
+		returns (BenchmarkResponse);
+}
+
+message BenchmarkRequest {
+	uint32 id = 1;
+	string message = 2;
+}
+
+message BenchmarkResponse {
+    uint32 id = 1;
+    string message = 2;
+    int64 timestamp = 3;
+}
