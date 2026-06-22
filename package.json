@@ -29,13 +29,15 @@
         "@types/autocannon": "^7.12.7",
         "@types/cross-spawn": "^6.0.6",
         "@types/dockerode": "^3.3.42",
-        "@types/node": "^24.0.8",
+        "@types/node": "^24.13.2",
         "@types/pidusage": "^2.0.5",
         "@types/ws": "^8.18.1",
         "ts-node": "^10.9.2",
         "typescript": "^5.8.3"
     },
     "dependencies": {
+        "@grpc/grpc-js": "^1.14.4",
+        "@grpc/proto-loader": "^0.8.1",
         "autocannon": "^8.0.0",
         "cross-spawn": "^7.0.6",
         "dockerode": "^4.0.7",
