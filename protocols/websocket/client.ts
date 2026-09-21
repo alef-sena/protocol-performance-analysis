@@ -41,20 +41,31 @@ function percentile(
 	return sorted[Math.max(0, index)];
 }
 
+function minMax(values: number[]): { min: number; max: number } {
+	let min = Infinity;
+	let max = -Infinity;
+
+	for (const value of values) {
+		if (value < min) min = value;
+		if (value > max) max = value;
+	}
+
+	return { min, max };
+}
+
 async function sendRequest(
 	id: number
 ): Promise<void> {
 
 	return new Promise((resolve) => {
+		const startTime = Date.now();
+
+		const startHr = process.hrtime.bigint();
 
 		const payload = JSON.stringify({
 			id,
 			message: PAYLOAD
 		});
-
-		const startTime = Date.now();
-
-		const startHr = process.hrtime.bigint();
 
 		const timeout = setTimeout(() => {
 			const endTime = Date.now();
@@ -92,8 +103,6 @@ async function runAll() {
 
 	const testStartTime = Date.now();
 
-	const batches: number[][] = [];
-
 	for ( let i = 1; i <= TOTAL_REQUESTS; i += CONCURRENCY ) {
 		const batch: number[] = [];
 
@@ -101,10 +110,6 @@ async function runAll() {
 			batch.push(j);
 		}
 
-		batches.push(batch);
-	}
-
-	for (const batch of batches) {
 		await Promise.all(batch.map(sendRequest));
 	}
 
@@ -127,8 +132,7 @@ async function runAll() {
 		0
 	) / latencies.length;
 
-	const minLatencyMs = Math.min(...latencies);
-	const maxLatencyMs = Math.max(...latencies);
+	const latencyBounds = minMax(latencies);
 
 	const p50LatencyMs = percentile(latencies, 50);
 	const p95LatencyMs = percentile(latencies, 95);
@@ -160,8 +164,8 @@ async function runAll() {
 		throughputReqPerSec,
 
 		averageLatencyMs,
-		minLatencyMs,
-		maxLatencyMs,
+		minLatencyMs: latencyBounds.min,
+		maxLatencyMs: latencyBounds.max,
 
 		p50LatencyMs,
 		p95LatencyMs,

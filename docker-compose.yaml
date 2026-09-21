@@ -75,5 +75,31 @@ services:
     volumes:
       - ./data:/app/data
 
+  mqtt-server:
+    container_name: mqtt-server
+    build:
+      context: .
+      dockerfile: docker/mqtt/Dockerfile.server
+    networks:
+      - testnet
+
+  mqtt-client:
+    container_name: mqtt-client
+    build:
+      context: .
+      dockerfile: docker/mqtt/Dockerfile.client
+    networks:
+      - testnet
+    depends_on:
+      - mqtt-server
+    environment:
+      TARGET: mqtt://mqtt-server:1883
+      PAYLOAD_KB: 1
+      TOTAL_REQUESTS: 1
+      CONCURRENCY: 1
+      OUTPUT_PATH: /app/data/raw/test/request-results.json
+    volumes:
+      - ./data:/app/data
+
 networks:
   testnet:

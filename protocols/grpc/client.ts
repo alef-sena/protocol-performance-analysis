@@ -49,6 +49,23 @@ const results: {
 	statusCode: number;
 }[] = [];
 
+function waitForConnection(): Promise<void> {
+	return new Promise((resolve, reject) => {
+		const deadline = new Date(
+			Date.now() + Number(process.env.REQUEST_TIMEOUT_MS || 30000)
+		);
+
+		client.waitForReady(deadline, (error?: Error) => {
+			if (error) {
+				reject(error);
+				return;
+			}
+
+			resolve();
+		});
+	});
+}
+
 function percentile(
 	values: number[],
 	p: number
@@ -59,6 +76,18 @@ function percentile(
 	const index = Math.ceil((p / 100) * sorted.length) - 1;
 
 	return sorted[Math.max(0, index)];
+}
+
+function minMax(values: number[]): { min: number; max: number } {
+	let min = Infinity;
+	let max = -Infinity;
+
+	for (const value of values) {
+		if (value < min) min = value;
+		if (value > max) max = value;
+	}
+
+	return { min, max };
 }
 
 async function sendRequest(
@@ -85,12 +114,14 @@ async function sendRequest(
 					const endTime = Date.now();
 					const endHr = process.hrtime.bigint();
 
+					const responseIdMatches = !error && response?.id === id;
+
 					results.push({
 						request: id,
 						startTime,
 						endTime,
 						latencyMs: Number(endHr - startHr) / 1_000_000,
-						statusCode: error ? 0 : 200
+						statusCode: responseIdMatches ? 200 : 0
 					});
 
 					resolve();
@@ -101,6 +132,7 @@ async function sendRequest(
 }
 
 async function runAll() {
+	await waitForConnection();
 
 	const testStartTime = Date.now();
 
@@ -135,6 +167,7 @@ async function runAll() {
 		throw new Error('Nenhuma requisição foi registrada');
 	}
 	const averageLatencyMs = latencies.reduce((a, b) => a + b,0) / latencies.length;
+	const latencyBounds = minMax(latencies);
 
 	if (!OUTPUT_PATH) {
 		throw new Error('OUTPUT_PATH não definido');
@@ -157,8 +190,8 @@ async function runAll() {
 		throughputReqPerSec,
 
 		averageLatencyMs,
-		minLatencyMs: Math.min(...latencies),
-		maxLatencyMs: Math.max(...latencies),
+			minLatencyMs: latencyBounds.min,
+			maxLatencyMs: latencyBounds.max,
 
 		p50LatencyMs: percentile(latencies, 50),
 		p95LatencyMs: percentile(latencies, 95),
@@ -174,6 +207,7 @@ async function runAll() {
 	fs.writeFileSync(resolvedOutputPath, JSON.stringify(output, null, 2));
 
 	console.log(`Resultados salvos em ${resolvedOutputPath}`);
+	console.log(`Tempo total de execução: ${totalExecutionTimeMs}ms (${(totalExecutionTimeMs / 1000).toFixed(2)}s)`);
 }
 
 runAll().catch(console.error);

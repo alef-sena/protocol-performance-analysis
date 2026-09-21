@@ -41,6 +41,7 @@
         "autocannon": "^8.0.0",
         "cross-spawn": "^7.0.6",
         "dockerode": "^4.0.7",
+        "mqtt": "^5.15.1",
         "pidusage": "^4.0.1",
         "pidusage-tree": "^2.0.5",
         "undici": "^7.12.0",
