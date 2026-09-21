@@ -1,4 +1,5 @@
 import fs from 'fs';
+import http from 'http';
 import path from 'path';
 
 const HOST = process.env.TARGET?.split(':')[0] || 'localhost';
@@ -8,6 +9,12 @@ const PAYLOAD_SIZE = parseInt(process.env.PAYLOAD_KB || '1') * 1024;
 const CONCURRENCY = parseInt(process.env.CONCURRENCY || '1');
 const REQUEST_TIMEOUT_MS = parseInt(process.env.REQUEST_TIMEOUT_MS || '5000');
 const PAYLOAD = 'x'.repeat(PAYLOAD_SIZE);
+const AGENT = new http.Agent({
+	keepAlive: true,
+	maxSockets: CONCURRENCY,
+	maxFreeSockets: CONCURRENCY,
+	timeout: REQUEST_TIMEOUT_MS
+});
 
 const results: {
 	request: number;
@@ -20,78 +27,105 @@ const results: {
 let completedRequests = 0;
 
 async function sendRequest(i: number): Promise<void> {
-	const payload = JSON.stringify({
-		message: PAYLOAD
-	});
-
-	const url = `http://${HOST}:${PORT}/process`;
-
 	const startTimestamp = Date.now();
 	const startHr = process.hrtime.bigint();
+	const requestBody = JSON.stringify({
+		id: i,
+		message: PAYLOAD
+	});
+	const requestBodyLength = Buffer.byteLength(requestBody).toString();
 
-	const controller = new AbortController();
-
-	const timeout = setTimeout(() => {
-		controller.abort();
-	}, REQUEST_TIMEOUT_MS);
-
-	try {
-		const res = await fetch(url, {
-			method: 'POST',
-			headers: {
-				'Content-Type': 'application/json',
-				'Content-Length':
-					Buffer.byteLength(payload).toString(),
+	return new Promise((resolve) => {
+		const request = http.request(
+			{
+				host: HOST,
+				port: PORT,
+				path: '/process',
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+					'Content-Length': requestBodyLength,
+				},
+				timeout: REQUEST_TIMEOUT_MS,
+				agent: AGENT,
 			},
-			body: payload,
-			signal: controller.signal,
+			(response) => {
+				const responseChunks: Buffer[] = [];
+
+				response.on('data', (chunk) => {
+					responseChunks.push(Buffer.from(chunk));
+				});
+
+				response.on('end', () => {
+					let responseIdMatches = false;
+
+					try {
+						const responseData = JSON.parse(
+							Buffer.concat(responseChunks).toString()
+						);
+						responseIdMatches = responseData.id === i;
+					} catch {
+						responseIdMatches = false;
+					}
+
+					const endHr = process.hrtime.bigint();
+					const endTimestamp = Date.now();
+
+					const latencyMs =
+						Number(endHr - startHr) / 1_000_000;
+
+					results.push({
+						request: i,
+						startTime: startTimestamp,
+						endTime: endTimestamp,
+						latencyMs,
+						statusCode: responseIdMatches
+							? response.statusCode || 0
+							: 0,
+					});
+
+					completedRequests++;
+					resolve();
+				});
+			}
+		);
+
+		request.on('timeout', () => {
+			request.destroy(new Error('Request timeout'));
 		});
 
-		clearTimeout(timeout);
+		request.on('error', (error: any) => {
+			const endHr = process.hrtime.bigint();
+			const endTimestamp = Date.now();
 
-		const endHr = process.hrtime.bigint();
-		const endTimestamp = Date.now();
+			const latencyMs =
+				Number(endHr - startHr) / 1_000_000;
 
-		const latencyMs =
-			Number(endHr - startHr) / 1_000_000;
+			results.push({
+				request: i,
+				startTime: startTimestamp,
+				endTime: endTimestamp,
+				latencyMs,
+				statusCode: 0,
+			});
 
-		results.push({
-			request: i,
-			startTime: startTimestamp,
-			endTime: endTimestamp,
-			latencyMs,
-			statusCode: res.status,
-		});
-	} catch (error: any) {
-		clearTimeout(timeout);
+			if (error.message === 'Request timeout') {
+				console.error(
+					`Requisição ${i} expirou após ${REQUEST_TIMEOUT_MS}ms`
+				);
+			} else {
+				console.error(
+					`Erro na requisição ${i}:`,
+					error.message
+				);
+			}
 
-		const endHr = process.hrtime.bigint();
-		const endTimestamp = Date.now();
-
-		const latencyMs =
-			Number(endHr - startHr) / 1_000_000;
-
-		results.push({
-			request: i,
-			startTime: startTimestamp,
-			endTime: endTimestamp,
-			latencyMs,
-			statusCode: 0,
+			completedRequests++;
+			resolve();
 		});
 
-		if (error.name === 'AbortError') {
-			console.error(
-				`Requisição ${i} expirou após ${REQUEST_TIMEOUT_MS}ms`
-			);
-		} else {
-			console.error(
-				`Erro na requisição ${i}:`,
-				error.message
-			);
-		}
-	}
-
-	completedRequests++;
+		request.end(requestBody);
+	});
 }
 
 async function runBatch(batch: number[]) {
@@ -104,8 +138,20 @@ function percentile(values: number[], p: number): number {
 	return sorted[Math.max(0, index)];
 }
 
+function minMax(values: number[]): { min: number; max: number } {
+	let min = Infinity;
+	let max = -Infinity;
+
+	for (const value of values) {
+		if (value < min) min = value;
+		if (value > max) max = value;
+	}
+
+	return { min, max };
+}
+
 async function runAll() {
-	const batches: number[][] = [];
+	const testStartTime = Date.now();
 
 	for (let i = 1; i <= TOTAL_REQUESTS; i += CONCURRENCY) {
 		const batch: number[] = [];
@@ -118,12 +164,6 @@ async function runAll() {
 			batch.push(j);
 		}
 
-		batches.push(batch);
-	}
-
-	const testStartTime = Date.now();
-
-	for (const batch of batches) {
 		await runBatch(batch);
 	}
 
@@ -147,8 +187,7 @@ async function runAll() {
 	const averageLatencyMs =
 		latencies.reduce((a, b) => a + b, 0) / latencies.length;
 
-	const minLatencyMs = Math.min(...latencies);
-	const maxLatencyMs = Math.max(...latencies);
+	const latencyBounds = minMax(latencies);
 
 	const outputPath = process.env.OUTPUT_PATH;
 
@@ -181,8 +220,8 @@ async function runAll() {
 		throughputReqPerSec,
 
 		averageLatencyMs,
-		minLatencyMs,
-		maxLatencyMs,
+		minLatencyMs: latencyBounds.min,
+		maxLatencyMs: latencyBounds.max,
 
 		p50LatencyMs,
 		p95LatencyMs,
@@ -198,6 +237,8 @@ async function runAll() {
 
 	console.log(`Resultados das requisições salvos em ${resolvedOutputPath}`);
 	console.log(`Tempo total de execução: ${totalExecutionTimeMs}ms (${(totalExecutionTimeMs / 1000).toFixed(2)}s)`);
+
+	AGENT.destroy();
 }
 
 runAll();

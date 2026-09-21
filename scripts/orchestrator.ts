@@ -2,12 +2,12 @@ import { spawn, spawnSync, execSync } from 'child_process';
 import http from 'http';
 import path from 'path';
 import fs from 'fs';
-import Docker from 'dockerode';
 
 const PROTOCOLS: Protocol[] = [
 	'http',
 	'websocket',
 	'grpc',
+	'mqtt',
 ];
 const PROTOCOL_CONFIG = {
 	http: {
@@ -33,11 +33,24 @@ const PROTOCOL_CONFIG = {
 		target: 'grpc-server:50051',
 		healthUrl: '',
 	},
+
+	mqtt: {
+		serverContainerName: 'mqtt-server',
+		clientContainerName: 'mqtt-client',
+		clientScript: 'protocols/mqtt/client.ts',
+		target: 'mqtt://mqtt-server:1883',
+		healthUrl: '',
+	},
 } as const;
 type Protocol = keyof typeof PROTOCOL_CONFIG;
 type WorkLoad = { requests: number; payloadKB: number; concurrency: number; }[]
 const RAW_DATA_DIR = path.resolve('data/raw');
-// const docker = new Docker();
+
+type ContainerStatsSample = {
+	timestamp: number;
+	cpuPercent: number;
+	memoryMB: number;
+};
 
 function sleep(ms: number) {
 	return new Promise(resolve => setTimeout(resolve, ms));
@@ -48,55 +61,18 @@ async function collectContainerStats(
 	intervalMs: number,
 	collectingFlag: () => boolean
 ): Promise<any[]> {
-	const stats: {
-		timestamp: number;
-		cpuPercent: number;
-		memoryMB: number;
-	}[] = [];
+	const stats: ContainerStatsSample[] = [];
+
+	// Discard the first docker stats read because it is often affected by
+	// container-start accounting instead of the steady test interval.
+	readContainerStats(containerName);
+	await sleep(0);
 
 	while (collectingFlag()) {
-		try {
-			const output = execSync(
-				`docker stats --no-stream --format "{{.CPUPerc}};{{.MemUsage}}" ${containerName}`
-			)
-				.toString()
-				.trim();
+		const sample = readContainerStats(containerName);
 
-			const [cpuText, memoryText] = output.split(';');
-
-			const cpuPercent = parseFloat(
-				cpuText.replace('%', '').replace(',', '.')
-			);
-
-			const memoryUsed = memoryText.split('/')[0].trim();
-
-			let memoryMB = 0;
-
-			if (memoryUsed.endsWith('MiB')) {
-				memoryMB = parseFloat(memoryUsed.replace('MiB', ''));
-			} else if (memoryUsed.endsWith('GiB')) {
-				memoryMB =
-					parseFloat(memoryUsed.replace('GiB', '')) * 1024;
-			} else if (memoryUsed.endsWith('KiB')) {
-				memoryMB =
-					parseFloat(memoryUsed.replace('KiB', '')) / 1024;
-			} else if (memoryUsed.endsWith('B')) {
-				memoryMB =
-					parseFloat(memoryUsed.replace('B', '')) /
-					1024 /
-					1024;
-			}
-
-			stats.push({
-				timestamp: Date.now(),
-				cpuPercent,
-				memoryMB,
-			});
-		} catch (error) {
-			console.error(
-				`Erro ao coletar métricas do container ${containerName}:`,
-				error
-			);
+		if (sample) {
+			stats.push(sample);
 		}
 
 		await sleep(intervalMs);
@@ -105,17 +81,74 @@ async function collectContainerStats(
 	return stats;
 }
 
+function readContainerStats(
+	containerName: string
+): ContainerStatsSample | null {
+	try {
+		const output = execSync(
+			`docker stats --no-stream --format "{{.CPUPerc}};{{.MemUsage}}" ${containerName}`
+		)
+			.toString()
+			.trim();
+
+		const [cpuText, memoryText] = output.split(';');
+
+		const cpuPercent = parseFloat(
+			cpuText.replace('%', '').replace(',', '.')
+		);
+
+		const memoryUsed = memoryText.split('/')[0].trim();
+
+		let memoryMB = 0;
+
+		if (memoryUsed.endsWith('MiB')) {
+			memoryMB = parseFloat(memoryUsed.replace('MiB', ''));
+		} else if (memoryUsed.endsWith('GiB')) {
+			memoryMB =
+				parseFloat(memoryUsed.replace('GiB', '')) * 1024;
+		} else if (memoryUsed.endsWith('KiB')) {
+			memoryMB =
+				parseFloat(memoryUsed.replace('KiB', '')) / 1024;
+		} else if (memoryUsed.endsWith('B')) {
+			memoryMB =
+				parseFloat(memoryUsed.replace('B', '')) /
+				1024 /
+				1024;
+		}
+
+		return {
+			timestamp: Date.now(),
+			cpuPercent,
+			memoryMB,
+		};
+	} catch (error) {
+		console.error(
+			`Erro ao coletar métricas do container ${containerName}:`,
+			error
+		);
+
+		return null;
+	}
+}
+
 function runDockerComposeUp(protocol: Protocol): Promise<void> {
 	return new Promise((resolve, reject) => {
-		console.log(`Subindo servidor ${PROTOCOL_CONFIG[protocol].serverContainerName}...`);
+		const config = PROTOCOL_CONFIG[protocol];
+
+		const services = [
+			config.serverContainerName,
+			config.clientContainerName
+		];
+
+		console.log(`Subindo serviços do protocolo ${protocol}: ${services.join(', ')}...`);
+
 		const up = spawn(
 			'docker',
 			[
 				'compose',
 				'up',
 				'-d',
-				PROTOCOL_CONFIG[protocol].serverContainerName,
-				PROTOCOL_CONFIG[protocol].clientContainerName
+				...services
 			],
 			{ stdio: 'inherit' }
 		);
@@ -123,6 +156,38 @@ function runDockerComposeUp(protocol: Protocol): Promise<void> {
 		up.on('close', (code) => {
 			if (code === 0) resolve();
 			else reject(new Error(`docker compose up terminou com código ${code}`));
+		});
+	});
+}
+
+function buildDockerImages(quiet = true): Promise<void> {
+	return new Promise((resolve, reject) => {
+		console.log('Construindo imagens Docker antes da execução...');
+
+		const args = [
+			'compose',
+			'build'
+		];
+
+		if (quiet) {
+			args.push('--quiet');
+		}
+
+		const build = spawn(
+			'docker',
+			args,
+			{
+				stdio: quiet ? 'ignore' : 'inherit'
+			}
+		);
+
+		build.on('close', (code) => {
+			if (code === 0) {
+				console.log('Imagens Docker construídas.\n');
+				resolve();
+			} else {
+				reject(new Error(`docker compose build terminou com código ${code}`));
+			}
 		});
 	});
 }
@@ -180,10 +245,92 @@ function waitForGrpcServer(
 
 	console.log('Aguardando servidor gRPC responder...');
 
-	return waitForContainerRunning(
+	return waitForDockerExecSuccess(
 		containerName,
-		timeoutMs
+		[
+			'node',
+			'-e',
+			'const net=require("net");const s=net.connect(50051,"127.0.0.1",()=>process.exit(0));s.on("error",()=>process.exit(1));setTimeout(()=>process.exit(1),1000);'
+		],
+		timeoutMs,
+		'servidor gRPC'
 	);
+}
+
+function waitForMqttServer(
+	containerName: string,
+	timeoutMs = 10000
+): Promise<void> {
+
+	console.log('Aguardando broker e aplicação MQTT responderem...');
+
+	return waitForDockerExecSuccess(
+		containerName,
+		[
+			'test',
+			'-f',
+			'/tmp/mqtt-app-ready'
+		],
+		timeoutMs,
+		'stack MQTT'
+	);
+}
+
+function waitForDockerExecSuccess(
+	containerName: string,
+	command: string[],
+	timeoutMs: number,
+	label: string
+): Promise<void> {
+	return new Promise((resolve, reject) => {
+		const start = Date.now();
+		const interval = setInterval(() => {
+			const status = spawnSync(
+				'docker',
+				[
+					'exec',
+					containerName,
+					...command
+				],
+				{
+					stdio: 'ignore'
+				}
+			);
+
+			if (status.status === 0) {
+				clearInterval(interval);
+				console.log(`${label} OK`);
+				resolve();
+			} else if (Date.now() - start > timeoutMs) {
+				clearInterval(interval);
+				reject(new Error(`Timeout: ${label} não ficou pronto`));
+			}
+		}, 500);
+	});
+}
+
+async function waitForProtocolReady(protocol: Protocol): Promise<void> {
+	const config = PROTOCOL_CONFIG[protocol];
+
+	await waitForContainerRunning(config.serverContainerName, 10000);
+	await waitForContainerRunning(config.clientContainerName, 10000);
+
+	if (protocol === 'grpc') {
+		await waitForGrpcServer(config.serverContainerName);
+		return;
+	}
+
+	if (protocol === 'mqtt') {
+		await waitForMqttServer(config.serverContainerName);
+		return;
+	}
+
+	if (config.healthUrl) {
+		await waitForServerHealth(config.healthUrl);
+		return;
+	}
+
+	console.log(`Protocolo ${protocol} não usa health check...`);
 }
 
 function cleanupDocker() {
@@ -306,11 +453,21 @@ async function cleanDataDirectories() {
 }
 
 async function orchestrate() {
-	await cleanDataDirectories()
-
 	const settingsPath = path.resolve(__dirname,'../config/test-settings.json');
 
 	const testSettings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+
+	if (testSettings.cleanupBeforeRun === true) {
+		await cleanDataDirectories()
+	} else {
+		fs.mkdirSync(path.resolve(__dirname, '../data/raw'), {
+			recursive: true
+		});
+
+		fs.mkdirSync(path.resolve(__dirname, '../data/processed'), {
+			recursive: true
+		});
+	}
 
 	const repetitions = testSettings.repetitions || 1;
 
@@ -319,6 +476,10 @@ async function orchestrate() {
 	const waitAfterStartupMs = testSettings.waitAfterStartupMs || 0;
 
 	const requestTimeoutMs = testSettings.requestTimeoutMs || 5000;
+
+	if (testSettings.buildImagesBeforeRun !== false) {
+		await buildDockerImages(testSettings.quietDockerBuild !== false);
+	}
 
 	const workloadPath = path.resolve(__dirname,'../config/workload.json');
 
@@ -360,16 +521,7 @@ async function orchestrate() {
 					fs.mkdirSync(scenarioDir, {recursive: true,});
 
 					await runDockerComposeUp(protocol);
-					await waitForContainerRunning(PROTOCOL_CONFIG[protocol].serverContainerName, 10000);
-					await waitForContainerRunning(PROTOCOL_CONFIG[protocol].clientContainerName, 10000);
-
-					const healthUrl = PROTOCOL_CONFIG[protocol].healthUrl;
-
-					if (protocol === 'grpc') {
-						await waitForGrpcServer(PROTOCOL_CONFIG[protocol].serverContainerName);
-					} else {
-						await waitForServerHealth(healthUrl);
-					}
+					await waitForProtocolReady(protocol);
 
 					if (waitAfterStartupMs > 0) {
 						console.log(`Aguardando ${waitAfterStartupMs}ms antes do início do teste...`);
@@ -384,7 +536,7 @@ async function orchestrate() {
 
 					await runClientContainer(requests, payloadKB, concurrency, requestTimeoutMs, requestResultsPathContainer, protocol);
 
-					console.log(`Teste: [${requests} requisições, ${payloadKB} KB] finalizado!`);
+					console.log(`Teste: [${requests} requisições, ${payloadKB} KB, concorrência ${concurrency}] finalizado!`);
 
 					collecting = false;
 

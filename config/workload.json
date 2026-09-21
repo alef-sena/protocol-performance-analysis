@@ -1,4 +1,6 @@
 [
-  { "requests": 100000, "payloadKB": 1, "concurrency": 1 },
-  { "requests": 100000, "payloadKB": 1, "concurrency": 100 }
+	{ "requests": 10000, "payloadKB": 1, "concurrency": 1 },
+	{ "requests": 10000, "payloadKB": 100, "concurrency": 1 },
+	{ "requests": 100000, "payloadKB": 1, "concurrency": 100 },
+	{ "requests": 100000, "payloadKB": 100, "concurrency": 100 }
 ]

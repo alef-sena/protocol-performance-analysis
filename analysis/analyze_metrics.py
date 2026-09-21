@@ -4,6 +4,7 @@ import statistics
 import matplotlib.pyplot as plt
 import pandas as pd
 import re
+import shutil
 
 RAW_DATA_DIR = 'data/raw'
 PROCESSED_DIR = 'data/processed'
@@ -14,6 +15,51 @@ REQUEST_RESULTS_FILE = 'request-results.json'
 RESOURCE_USAGE_FILE = 'resource-usage.json'
 SUMMARY_FILE = 'summary.json'
 GLOBAL_SUMMARY_FILE = 'global_summary.json'
+GLOBAL_REPORT_FILE = 'protocol-comparison-report.md'
+COMPARISON_METRICS = {
+	'avgLatencyMs': {
+		'title': 'Latência Média',
+		'ylabel': 'Latência (ms)',
+		'filename': 'avg-latency-protocols.png',
+		'color': 'orange'
+	},
+	'p50LatencyMs': {
+		'title': 'P50 Latência',
+		'ylabel': 'Latência (ms)',
+		'filename': 'p50-latency-protocols.png',
+		'color': 'green'
+	},
+	'p95LatencyMs': {
+		'title': 'P95 Latência',
+		'ylabel': 'Latência (ms)',
+		'filename': 'p95-latency-protocols.png',
+		'color': 'blue'
+	},
+	'p99LatencyMs': {
+		'title': 'P99 Latência',
+		'ylabel': 'Latência (ms)',
+		'filename': 'p99-latency-protocols.png',
+		'color': 'purple'
+	},
+	'avgThroughputReqPerSec': {
+		'title': 'Throughput Médio',
+		'ylabel': 'Requisições por segundo',
+		'filename': 'throughput-protocols.png',
+		'color': 'purple'
+	},
+	'avgCpuPercent': {
+		'title': 'Uso Médio de CPU',
+		'ylabel': 'CPU (%)',
+		'filename': 'cpu-protocols.png',
+		'color': 'blue'
+	},
+	'avgMemoryMB': {
+		'title': 'Uso Médio de Memória',
+		'ylabel': 'Memória (MB)',
+		'filename': 'memory-protocols.png',
+		'color': 'green'
+	}
+}
 
 os.makedirs(PROCESSED_RUNS_DIR, exist_ok=True)
 os.makedirs(PROCESSED_AGGREGATES_DIR, exist_ok=True)
@@ -76,6 +122,31 @@ def load_all_global_summaries():
 
 def build_comparison_summary():
 	summaries = load_all_global_summaries()
+
+	return summaries
+
+
+def load_all_run_summaries():
+	summaries = {}
+
+	scenarios = sorted(
+		os.listdir(PROCESSED_AGGREGATES_DIR),
+		key=scenario_sort_key
+	)
+
+	for scenario in scenarios:
+		summary_path = os.path.join(
+			PROCESSED_AGGREGATES_DIR,
+			scenario,
+			SUMMARY_FILE
+		)
+
+		if not os.path.exists(summary_path):
+			continue
+
+		summaries[scenario] = load_json(
+			summary_path
+		)
 
 	return summaries
 
@@ -148,8 +219,8 @@ def calculate_global_summary(summary_data):
 
 	for protocol, runs in summary_data.items():
 
-		# if not runs:
-		# 	continue
+		if not runs:
+			continue
 
 		metrics = {
 			'avgLatencyMs': [],
@@ -389,24 +460,24 @@ def create_memory_graph(usage, output_path):
 	plt.close()
 
 
-def create_aggregate_graph(
+def create_protocol_bar_graph(
 	values,
 	title,
 	ylabel,
 	output_path,
 	color
 ):
-	sorted_items = sorted(
-		values.items(),
-		key=lambda item: scenario_sort_key(item[0])
-	)
+	if not values:
+		return
 
-	scenarios, metric_values = zip(*sorted_items)
+	sorted_items = sorted(values.items())
+
+	protocols, metric_values = zip(*sorted_items)
 
 	plt.figure(figsize=(10, 4))
 
 	bars = plt.bar(
-		scenarios,
+		protocols,
 		metric_values,
 		color=color
 	)
@@ -432,13 +503,9 @@ def create_aggregate_graph(
 	)
 
 	plt.title(title)
-	plt.xlabel('Cenário')
+	plt.xlabel('Protocolo')
 	plt.ylabel(ylabel)
-
-	plt.xticks(rotation=20, ha='right')
-
 	plt.grid(axis='y')
-
 	plt.legend()
 
 	plt.tight_layout()
@@ -446,38 +513,308 @@ def create_aggregate_graph(
 	plt.close()
 
 
-def create_metric_comparison_graph(
-    comparison_summary,
-    protocol,
-    metric_name,
-    title,
-    ylabel,
-    filename,
-    color
-):
-	values = {}
+def clean_comparison_outputs():
+	if os.path.isdir(PROCESSED_COMPARISONS_DIR):
+		shutil.rmtree(PROCESSED_COMPARISONS_DIR)
 
+	os.makedirs(PROCESSED_COMPARISONS_DIR, exist_ok=True)
+
+
+def create_scenario_protocol_comparisons(comparison_summary):
 	for scenario, protocols in comparison_summary.items():
-
-		if protocol not in protocols:
-			continue
-
-		values[scenario] = (
-			protocols[protocol]
-			[metric_name]
-			['mean']
+		output_dir = os.path.join(
+			PROCESSED_COMPARISONS_DIR,
+			'scenarios',
+			scenario
 		)
 
-	create_aggregate_graph(
-		values,
-		title,
-		ylabel,
-		os.path.join(
-			PROCESSED_COMPARISONS_DIR,
-			filename
-		),
-		color
+		os.makedirs(output_dir, exist_ok=True)
+
+		for metric_name, metric_config in COMPARISON_METRICS.items():
+			values = {}
+
+			for protocol, metrics in protocols.items():
+				if metric_name not in metrics:
+					continue
+
+				values[protocol] = metrics[metric_name]['mean']
+
+			create_protocol_bar_graph(
+				values,
+				f"{metric_config['title']} por Protocolo - {scenario}",
+				metric_config['ylabel'],
+				os.path.join(
+					output_dir,
+					metric_config['filename']
+				),
+				metric_config['color']
+			)
+
+
+def create_run_protocol_comparisons(run_summaries):
+	for scenario, protocols in run_summaries.items():
+		runs = sorted({
+			run
+			for protocol_runs in protocols.values()
+			for run in protocol_runs.keys()
+		})
+
+		for run in runs:
+			output_dir = os.path.join(
+				PROCESSED_COMPARISONS_DIR,
+				'runs',
+				scenario,
+				run
+			)
+
+			os.makedirs(output_dir, exist_ok=True)
+
+			for metric_name, metric_config in COMPARISON_METRICS.items():
+				values = {}
+
+				for protocol, protocol_runs in protocols.items():
+					if run not in protocol_runs:
+						continue
+
+					values[protocol] = protocol_runs[run][metric_name]
+
+				create_protocol_bar_graph(
+					values,
+					f"{metric_config['title']} por Protocolo - {scenario} / {run}",
+					metric_config['ylabel'],
+					os.path.join(
+						output_dir,
+						metric_config['filename']
+					),
+					metric_config['color']
+				)
+
+
+def calculate_overall_protocol_summary(run_summaries):
+	metric_values_by_protocol = {}
+
+	for protocols in run_summaries.values():
+		for protocol, runs in protocols.items():
+			if protocol not in metric_values_by_protocol:
+				metric_values_by_protocol[protocol] = {
+					metric_name: []
+					for metric_name in COMPARISON_METRICS
+				}
+
+			for summary in runs.values():
+				for metric_name in COMPARISON_METRICS:
+					metric_values_by_protocol[protocol][metric_name].append(
+						summary[metric_name]
+					)
+
+	overall_summary = {}
+
+	for protocol, metrics in metric_values_by_protocol.items():
+		overall_summary[protocol] = {}
+
+		for metric_name, values in metrics.items():
+			if not values:
+				continue
+
+			overall_summary[protocol][metric_name] = {
+				'mean': round(statistics.mean(values), 2),
+				'min': round(min(values), 2),
+				'max': round(max(values), 2),
+				'stdev': round(
+					statistics.stdev(values), 2
+				) if len(values) > 1 else 0
+			}
+
+	return overall_summary
+
+
+def create_overall_protocol_comparisons(overall_summary):
+	output_dir = os.path.join(
+		PROCESSED_COMPARISONS_DIR,
+		'global'
 	)
+
+	os.makedirs(output_dir, exist_ok=True)
+
+	for metric_name, metric_config in COMPARISON_METRICS.items():
+		values = {}
+
+		for protocol, metrics in overall_summary.items():
+			if metric_name not in metrics:
+				continue
+
+			values[protocol] = metrics[metric_name]['mean']
+
+		create_protocol_bar_graph(
+			values,
+			f"{metric_config['title']} por Protocolo - Geral",
+			metric_config['ylabel'],
+			os.path.join(
+				output_dir,
+				metric_config['filename']
+			),
+			metric_config['color']
+		)
+
+
+def format_report_number(value, decimals=2):
+	return f'{value:.{decimals}f}'
+
+
+def calculate_request_totals(protocol_runs):
+	total_requests = sum(
+		run['totalRequests']
+		for run in protocol_runs.values()
+	)
+	successful_requests = sum(
+		run['successfulRequests']
+		for run in protocol_runs.values()
+	)
+	failed_requests = sum(
+		run['failedRequests']
+		for run in protocol_runs.values()
+	)
+	success_rate = (
+		successful_requests / total_requests * 100
+		if total_requests else 0
+	)
+
+	return {
+		'totalRequests': total_requests,
+		'successfulRequests': successful_requests,
+		'failedRequests': failed_requests,
+		'successRate': success_rate
+	}
+
+
+def find_best_protocol(protocols, metric_name, higher_is_better=False):
+	values = {
+		protocol: metrics[metric_name]['mean']
+		for protocol, metrics in protocols.items()
+		if metric_name in metrics
+	}
+
+	if not values:
+		return None
+
+	selector = max if higher_is_better else min
+	return selector(values, key=values.get)
+
+
+def create_global_comparison_report(comparison_summary, run_summaries):
+	output_dir = os.path.join(
+		PROCESSED_COMPARISONS_DIR,
+		'global'
+	)
+	os.makedirs(output_dir, exist_ok=True)
+
+	winning_metrics = {
+		'avgLatencyMs': ('latência média', False),
+		'p95LatencyMs': ('latência p95', False),
+		'p99LatencyMs': ('latência p99', False),
+		'avgThroughputReqPerSec': ('throughput', True),
+		'avgCpuPercent': ('CPU média', False),
+		'avgMemoryMB': ('memória média', False)
+	}
+	wins = {}
+	lines = [
+		'# Relatório comparativo de protocolos',
+		'',
+		'Este relatório é gerado automaticamente a partir das execuções '
+		'disponíveis em `data/raw`.',
+		'',
+		'Valores de latência menores são melhores; throughput maior é '
+		'melhor. CPU e memória representam o custo do lado servidor e da '
+		'infraestrutura obrigatória medida. No MQTT, isso inclui aplicação '
+		'e broker.',
+		'',
+		'## Resumo por cenário',
+		''
+	]
+
+	for scenario, protocols in comparison_summary.items():
+		lines.extend([
+			f'### {scenario}',
+			'',
+			'| Protocolo | Execuções | Sucesso | Latência média (ms) | '
+			'p50 (ms) | p95 (ms) | p99 (ms) | Throughput (req/s) | '
+			'CPU média (%) | Memória média (MB) |',
+			'|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|'
+		])
+
+		for protocol in sorted(protocols):
+			metrics = protocols[protocol]
+			protocol_runs = run_summaries.get(scenario, {}).get(protocol, {})
+			totals = calculate_request_totals(protocol_runs)
+			lines.append(
+				f'| {protocol} | {len(protocol_runs)} | '
+				f"{format_report_number(totals['successRate'])}% "
+				f"({totals['successfulRequests']}/{totals['totalRequests']}) | "
+				f"{format_report_number(metrics['avgLatencyMs']['mean'])} | "
+				f"{format_report_number(metrics['p50LatencyMs']['mean'])} | "
+				f"{format_report_number(metrics['p95LatencyMs']['mean'])} | "
+				f"{format_report_number(metrics['p99LatencyMs']['mean'])} | "
+				f"{format_report_number(metrics['avgThroughputReqPerSec']['mean'])} | "
+				f"{format_report_number(metrics['avgCpuPercent']['mean'])} | "
+				f"{format_report_number(metrics['avgMemoryMB']['mean'])} |"
+			)
+
+		lines.extend(['', '**Destaques:**', ''])
+		for metric_name, (label, higher_is_better) in winning_metrics.items():
+			winner = find_best_protocol(
+				protocols,
+				metric_name,
+				higher_is_better
+			)
+			if winner is None:
+				continue
+
+			wins[winner] = wins.get(winner, 0) + 1
+			value = protocols[winner][metric_name]['mean']
+			lines.append(
+				f'- Melhor {label}: **{winner}** '
+				f'({format_report_number(value)}).'
+			)
+
+		lines.append('')
+
+	lines.extend([
+		'## Contagem de destaques',
+		'',
+		'Esta contagem informa quantas vezes cada protocolo obteve o melhor '
+		'valor nas métricas acima. Ela não constitui uma classificação geral, '
+		'pois as métricas têm significados e prioridades diferentes.',
+		'',
+		'| Protocolo | Destaques |',
+		'|---|---:|'
+	])
+
+	for protocol, count in sorted(
+		wins.items(),
+		key=lambda item: (-item[1], item[0])
+	):
+		lines.append(f'| {protocol} | {count} |')
+
+	lines.extend([
+		'',
+		'## Notas para interpretação',
+		'',
+		'- Compare os protocolos prioritariamente dentro do mesmo cenário.',
+		'- Médias globais entre cenários com cargas diferentes não representam '
+		'um workload único e não devem definir sozinhas um vencedor.',
+		'- Resultados com apenas uma execução não permitem avaliar a variação '
+		'entre repetições.',
+		'- CPU acima de 100% pode representar o uso de mais de um núcleo lógico.',
+		'- O relatório descreve os resultados observados; diferenças de modelo '
+		'de conexão e arquitetura devem ser consideradas na análise metodológica.',
+		''
+	])
+
+	report_path = os.path.join(output_dir, GLOBAL_REPORT_FILE)
+	with open(report_path, 'w') as report_file:
+		report_file.write('\n'.join(lines))
+
+	print(f'Relatório comparativo salvo em: {report_path}')
 
 
 def process_run(run_dir, output_dir):
@@ -661,88 +998,42 @@ def main():
 
 		process_scenario(scenario)
 
+	clean_comparison_outputs()
+
 	comparison_summary = (build_comparison_summary())
 
 	save_comparison_summary(comparison_summary)
 
-	available_protocols = set()
+	run_summaries = load_all_run_summaries()
 
-	for scenario in comparison_summary.values():
-		available_protocols.update(
-			scenario.keys()
-		)
+	create_scenario_protocol_comparisons(
+		comparison_summary
+	)
 
-	for protocol in sorted(available_protocols):
+	create_run_protocol_comparisons(
+		run_summaries
+	)
 
-		create_metric_comparison_graph(
-			comparison_summary,
-			protocol,
-			'avgLatencyMs',
-			f'Latência Média (1000 req/bloco)',
-			'Latência (ms)',
-			f'latency-comparison-{protocol}.png',
-			'orange'
-		)
+	overall_summary = calculate_overall_protocol_summary(
+		run_summaries
+	)
 
-		create_metric_comparison_graph(
-			comparison_summary,
-			protocol,
-			'avgThroughputReqPerSec',
-			f'Throughput (req/s)',
-			'Requisições',
-			f'throughput-comparison-{protocol}.png',
-			'purple'
-		)
+	save_json(
+		os.path.join(
+			PROCESSED_COMPARISONS_DIR,
+			'global-protocol-summary.json'
+		),
+		overall_summary
+	)
 
-		create_metric_comparison_graph(
-			comparison_summary,
-			protocol,
-			'avgCpuPercent',
-			f'Uso de CPU (100% = 1 núcleo lógico)',
-			'CPU (%)',
-			f'cpu-comparison-{protocol}.png',
-			'blue'
-		)
+	create_overall_protocol_comparisons(
+		overall_summary
+	)
 
-		create_metric_comparison_graph(
-			comparison_summary,
-			protocol,
-			'avgMemoryMB',
-			f'Uso de Memória (MB)',
-			'Memória (MB)',
-			f'memory-comparison-{protocol}.png',
-			'green'
-		)
-
-		create_metric_comparison_graph(
-			comparison_summary,
-			protocol,
-			'p50LatencyMs',
-			f'P50 Latência ({protocol})',
-			'Latência (ms)',
-			f'p50-comparison-{protocol}.png',
-			'green'
-		)
-
-		create_metric_comparison_graph(
-			comparison_summary,
-			protocol,
-			'p95LatencyMs',
-			f'P95 Latência ({protocol})',
-			'Latência (ms)',
-			f'p95-comparison-{protocol}.png',
-			'blue'
-		)
-
-		create_metric_comparison_graph(
-			comparison_summary,
-			protocol,
-			'p99LatencyMs',
-			f'P99 Latência ({protocol})',
-			'Latência (ms)',
-			f'p99-comparison-{protocol}.png',
-			'purple'
-		)
+	create_global_comparison_report(
+		comparison_summary,
+		run_summaries
+	)
 
 
 if __name__ == '__main__':

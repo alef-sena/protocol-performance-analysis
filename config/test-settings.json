@@ -1,7 +1,9 @@
 {
-  "repetitions": 1,
+  "repetitions": 2,
   "resourceCollectionIntervalMs": 200,
   "cleanupBeforeRun": true,
+  "buildImagesBeforeRun": true,
+  "quietDockerBuild": true,
   "waitAfterStartupMs": 2000,
   "requestTimeoutMs": 5000
 }

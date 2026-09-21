@@ -1,0 +1,15 @@
+FROM node:22
+
+WORKDIR /app
+
+RUN apt-get update \
+	&& apt-get install -y mosquitto netcat-openbsd \
+	&& rm -rf /var/lib/apt/lists/*
+
+COPY package*.json ./
+
+RUN npm install
+
+COPY . .
+
+CMD ["sh", "docker/mqtt/start-server.sh"]
